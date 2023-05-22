@@ -4,6 +4,7 @@ import rasterio
 import rasterio.mask as RM
 import matplotlib.pyplot as plt
 import os
+os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx 
 import shutil
