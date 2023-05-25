@@ -144,13 +144,21 @@ def check_cell_diff(cell1,cell2):
     equals = xymatch and lenmatch
     return equals
 
-def get_similarity(gdf,col1,col2):
-    from sklearn.metrics import jaccard_score
-    from sklearn.preprocessing import MinMaxScaler
-    scaler = MinMaxScaler()
-    arr_1 = scaler.fit_transform(gdf[col1].values)
-    arr_2 = scaler.fit_transform(gdf[col2].values)
-    return jaccard_score(arr_1,arr_2)
+def mse(arr1, arr2):
+   diff = arr1 - arr2
+   err = np.sum(diff**2)
+   mse = err/(float(len(arr1)))
+   return mse
+
+def scale(ser):
+    ser -= ser.min()
+    ser /= ser.max()
+    return ser.values 
+
+def get_difference(gdf,col1,col2):
+    arr_1 = scale(gdf[col1])
+    arr_2 = scale(gdf[col2])
+    return mse(arr_1,arr_2)
 
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
@@ -166,36 +174,41 @@ def get_cell(cityID):
         cellHP.columns=["Hval", "geometry", "x", "y","Pval"]
         cellHP=cellHP[cellHP.Hval>=0] #nan value entah knp jadi -2147483648 use H sebagai destinasi
         cellHP.loc[cellHP["Pval"] <0, "Pval"] = 0
-        avgh = cellHP["Hval"].mean()
-
-        h_thrs = [25,35,45,55,65]
-        cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
-        cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
         cellHP["3d_dens"] = cellHP["Pval"] / cellHP["Hval"]  
-        
-        jcrd_pop_h = get_similarity(cellHP,"Pval","Hval")
-        jcrd_2d_3d = get_similarity(cellHP,"Pval","3d_dens")
-
-        gini_pop = get_gini(cellHP,"Pval")
-        gini_h = get_gini(cellHP,"Hval")
-        gini_3dpop = get_gini(cellHP, "3d_dens")
-
-        avgpop3d = cellHP["3d_dens"].mean()
-        maxpop3d = cellHP["3d_dens"].max()
-        minpop3d = cellHP["3d_dens"].min()
-
-        return  (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d, maxpop3d, minpop3d, avgh, jcrd_pop_h, jcrd_2d_3d)
+        return cellHP
     else:
         print(cityID, "has different h and p cropped-raster data")
-        return (cityID, [-1],-1,-1)
+        return 0
+
+def calc_aggregate(cityID):
+    cellHP = get_cell(cityID)
+    avgh = cellHP["Hval"].mean()
+    h_thrs = [25,35,45,55,65]
+    cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
+    cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
+    mse_pop_h = get_difference(cellHP,"Pval","Hval")
+    mse_2d_3d = get_difference(cellHP,"Pval","3d_dens")
+    gini_pop = get_gini(cellHP,"Pval")
+    gini_h = get_gini(cellHP,"Hval")
+    gini_3dpop = get_gini(cellHP, "3d_dens")
+    avgpop3d = cellHP["3d_dens"].mean()
+    maxpop3d = cellHP["3d_dens"].max()
+    minpop3d = cellHP["3d_dens"].min()
+    return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d, maxpop3d, minpop3d, avgh, mse_pop_h, mse_2d_3d)
+
+def print_file(cityID):
+    cellHP = get_cell(cityID)
+    cellHP.to_file("./data/cell_files/cell_"  + str(cityID) + ".json",driver="GeoJSON")
+    return 0
 
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 city=gpd.read_file(ghsfua)
-city = city.sort_values("FUA_p_2015")
+city = city.sort_values("FUA_p_2015").tail(200)
 city = city.set_index("eFUA_ID",drop=False)
+city = city.sample(n=60)
 
 #for running in cluster with SLURM
 
@@ -203,14 +216,16 @@ num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
 
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
-results = Parallel(n_jobs=num_cores, verbose=1)(delayed(get_cell)(idx) for (idx) in tqdm(city.eFUA_ID))
+results = Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in tqdm(city.eFUA_ID))
+
+"""
+results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx) for (idx) in tqdm(city.eFUA_ID))
 city_res = city.join(pd.DataFrame(results, columns=["index","cbd_areas","gini_pop","gini_h","gini_3dpop","avgpop3d","maxpop3d","minpop3d","avgh","jcrd_pop_h","jcrd_2d_3d"]).set_index("index"))
 city_res = city_res.drop("eFUA_ID",axis=1)
 city_res[["cbd_a_25","cbd_a_35","cbd_a_45","cbd_a_55","cbd_a_65"]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
 city_res = city_res.drop("cbd_areas",axis=1)
 
 print(city_res)
-
 city_res.to_file("./data/hthr25-65.json",driver="GeoJSON")
-
+"""
 
