@@ -160,7 +160,7 @@ def mean_center(points, w=None):
         w.shape = (1, len(points))
         return np.dot(w, points)[0]
     else:
-        points.mean(axis=0)
+        return points.mean(axis=0)
 
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
