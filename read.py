@@ -156,7 +156,7 @@ def mean_center(points, w=None):
     points=np.asarray(points)
     if w is not None:
         w=np.asarray(w)
-        w = weights * 1.0 / weights.sum()
+        w = w * 1.0 / w.sum()
         w.shape = (1, len(points))
         return np.dot(w, points)[0]
     else:
