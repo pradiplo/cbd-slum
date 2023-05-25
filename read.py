@@ -33,7 +33,7 @@ def get_raster_crs(file):
     with rasterio.open(file) as src:
         return src.crs
 
-def mask_raster(rasfile, shape_geoser,i="", drop=True):
+def mask_raster(rasfile, shape_geoser,i=""):
     with rasterio.open(rasfile) as src:
         crs=src.crs
         shape_geoser=shape_geoser.to_crs(crs)
@@ -65,8 +65,8 @@ def raster2array(rasterfn):
     return array
 
 def check_pixelANDcell(rasterfn, outSHPfn):
-    d=len(gpd.read_file("test.shp"))
-    raster = raster2array("masked_.tif")
+    d=len(gpd.read_file(outSHPfn))
+    raster = raster2array(rasterfn)
     px=raster.shape[1]*raster.shape[0]
     print(d, px)
     print("pixel pont and cell geometry have same len?->", (d-px)==0)
@@ -76,8 +76,7 @@ def array2shp(array,outSHPfn,rasterfn):
     raster = gdal.Open(rasterfn)
     geotransform = raster.GetGeoTransform()
     pixelWidth = geotransform[1]
-    #print("pixelwidth:", pixelWidth)
-
+    
     # wkbPoint
     shpDriver = ogr.GetDriverByName("ESRI Shapefile")
     if os.path.exists(outSHPfn):
@@ -160,6 +159,17 @@ def get_difference(gdf,col1,col2):
     arr_2 = scale(gdf[col2])
     return mse(arr_1,arr_2)
 
+def mean_center(points, w=None):
+    #points==> array([-000x, 000y])
+    points=np.asarray(points)
+    if w is not None:
+        w=np.asarray(w)
+        w = w * 1.0 / w.sum()
+        w.shape = (1, len(points))
+        return np.dot(w, points)[0]
+    else:
+        return points.mean(axis=0)
+
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
@@ -170,6 +180,7 @@ def get_cell(cityID):
     ######
     eqs = check_cell_diff(cellH,cellP)
     if eqs:
+        #merging cellH and CellP = cellHP 
         cellHP=cellH.join(cellP.VALUE.rename("P"))
         cellHP.columns=["Hval", "geometry", "x", "y","Pval"]
         cellHP=cellHP[cellHP.Hval>=0] #nan value entah knp jadi -2147483648 use H sebagai destinasi
@@ -201,6 +212,7 @@ def print_file(cityID):
     cellHP.to_file("./data/cell_files/cell_"  + str(cityID) + ".json",driver="GeoJSON")
     return 0
 
+#ok
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
