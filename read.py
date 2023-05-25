@@ -65,8 +65,8 @@ def raster2array(rasterfn):
     return array
 
 def check_pixelANDcell(rasterfn, outSHPfn):
-    d=len(gpd.read_file("test.shp"))
-    raster = raster2array("masked_.tif")
+    d=len(gpd.read_file(outSHPfn))
+    raster = raster2array(rasterfn)
     px=raster.shape[1]*raster.shape[0]
     print(d, px)
     print("pixel pont and cell geometry have same len?->", (d-px)==0)
@@ -76,8 +76,7 @@ def array2shp(array,outSHPfn,rasterfn):
     raster = gdal.Open(rasterfn)
     geotransform = raster.GetGeoTransform()
     pixelWidth = geotransform[1]
-    #print("pixelwidth:", pixelWidth)
-
+    
     # wkbPoint
     shpDriver = ogr.GetDriverByName("ESRI Shapefile")
     if os.path.exists(outSHPfn):
@@ -152,6 +151,17 @@ def get_similarity(gdf,col1,col2):
     arr_2 = scaler.fit_transform(gdf[col2].values)
     return jaccard_score(arr_1,arr_2)
 
+def mean_center(points, w=None):
+    #points==> array([-000x, 000y])
+    points=np.asarray(points)
+    if w is not None:
+        w=np.asarray(w)
+        w = weights * 1.0 / weights.sum()
+        w.shape = (1, len(points))
+        return np.dot(w, points)[0]
+    else:
+        points.mean(axis=0)
+
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
@@ -162,24 +172,30 @@ def get_cell(cityID):
     ######
     eqs = check_cell_diff(cellH,cellP)
     if eqs:
+        #merging cellH and CellP = cellHP 
         cellHP=cellH.join(cellP.VALUE.rename("P"))
         cellHP.columns=["Hval", "geometry", "x", "y","Pval"]
         cellHP=cellHP[cellHP.Hval>=0] #nan value entah knp jadi -2147483648 use H sebagai destinasi
-        cellHP.loc[cellHP["Pval"] <0, "Pval"] = 0
-        avgh = cellHP["Hval"].mean()
-
+        cellHP.loc[cellHP["Pval"] <0, "Pval"] = 0 #minus == nodata of pop as zero pop val 
+        
+        # prepare
         h_thrs = [25,35,45,55,65]
         cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
         cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
         cellHP["3d_dens"] = cellHP["Pval"] / cellHP["Hval"]  
         
+        #similarity of micro
         jcrd_pop_h = get_similarity(cellHP,"Pval","Hval")
         jcrd_2d_3d = get_similarity(cellHP,"Pval","3d_dens")
 
+        #hetero
         gini_pop = get_gini(cellHP,"Pval")
         gini_h = get_gini(cellHP,"Hval")
         gini_3dpop = get_gini(cellHP, "3d_dens")
 
+
+        #descriptive stats
+        avgh = cellHP["Hval"].mean()
         avgpop3d = cellHP["3d_dens"].mean()
         maxpop3d = cellHP["3d_dens"].max()
         minpop3d = cellHP["3d_dens"].min()
