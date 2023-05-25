@@ -33,7 +33,7 @@ def get_raster_crs(file):
     with rasterio.open(file) as src:
         return src.crs
 
-def mask_raster(rasfile, shape_geoser,i="", drop=True):
+def mask_raster(rasfile, shape_geoser,i=""):
     with rasterio.open(rasfile) as src:
         crs=src.crs
         shape_geoser=shape_geoser.to_crs(crs)
@@ -189,6 +189,7 @@ def get_cell(cityID):
         print(cityID, "has different h and p cropped-raster data")
         return (cityID, [-1],-1,-1)
 
+#ok
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
