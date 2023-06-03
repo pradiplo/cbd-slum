@@ -204,7 +204,7 @@ def calc_aggregate(cityID):
     gini_3dpop = get_gini(cellHP, "3d_dens")
     avgpop3d = cellHP["3d_dens"].mean()
     maxpop3d = cellHP["3d_dens"].max()
-    minpop3d = cellHP["3d_dens"].min()
+    minpop3d = cellHP["3d_dens"].min()# meangless make it non-zore min??
     return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d, maxpop3d, minpop3d, avgh, mse_pop_h, mse_2d_3d)
 
 def print_file(cityID):
