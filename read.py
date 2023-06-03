@@ -185,7 +185,7 @@ def get_cell(cityID):
         cellHP.columns=["Hval", "geometry", "x", "y","Pval"]
         cellHP=cellHP[cellHP.Hval>=0] #nan value entah knp jadi -2147483648 use H sebagai destinasi
         cellHP.loc[cellHP["Pval"] <0, "Pval"] = 0
-        cellHP["3d_dens"] = cellHP["Pval"] / cellHP["Hval"]  
+        cellHP["3d_dens"] = cellHP["Pval"] / cellHP["Hval"]  #can be 0-div probelm,yields inf val ? == make gini and mse nan? hrs dihandle
         return cellHP
     else:
         print(cityID, "has different h and p cropped-raster data")
@@ -204,7 +204,7 @@ def calc_aggregate(cityID):
     gini_3dpop = get_gini(cellHP, "3d_dens")
     avgpop3d = cellHP["3d_dens"].mean()
     maxpop3d = cellHP["3d_dens"].max()
-    minpop3d = cellHP["3d_dens"].min()# meangless make it non-zore min??
+    minpop3d = cellHP["3d_dens"].min()# meaningless make it non-zore min??
     return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d, maxpop3d, minpop3d, avgh, mse_pop_h, mse_2d_3d)
 
 def print_file(cityID):
