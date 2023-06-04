@@ -175,9 +175,12 @@ def calc_loubar_threshold(gdf,raster_val):
         return gdf_rank.loc[lourank][raster_val]
 def get_jcr_hot(gdf, col1, col2):
     from sklearn.metrics import jaccard_score as js
+    gdf=gdf.astype({col1:float, col2:float})
+    #gdf[col1]=gdf[col1].astype(float)
+    #gdf[col2]=gdf[col2].astype(float)
     ar1=(gdf[col1]>= calc_loubar_threshold(gdf, col1)).replace({True:1, False:0})
     ar2=(gdf[col2]>= calc_loubar_threshold(gdf, col2)).replace({True:1, False:0})
-    return js(ar1, ar2)
+    return js(ar1.to_numpy(), ar2.to_numpy())
 
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
