@@ -181,7 +181,7 @@ def get_jcr_hot(gdf, col1, col2):
     ar1=(gdf[col1]>= calc_loubar_threshold(gdf, col1)).replace({True:1, False:0})
     ar2=(gdf[col2]>= calc_loubar_threshold(gdf, col2)).replace({True:1, False:0})
     return js(ar1.to_numpy(), ar2.to_numpy())
-
+#calc moran I/spreading index for raster vals just for fun? 
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
@@ -205,7 +205,7 @@ def get_cell(cityID):
 
 def calc_aggregate(cityID):
     cellHP = get_cell(cityID)
-    avgh = cellHP["Hval"].mean()
+    
     h_thrs = [15,25,35,45,55,65]
     cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -219,10 +219,10 @@ def calc_aggregate(cityID):
     gini_h = get_gini(cellHP,"Hval")
     gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
-    avgpop3d = cellHP["3d_dens"].mean()
-    #maxpop3d = cellHP["3d_dens"].max()#knp max 1 
-    #minpop3d = cellHP["3d_dens"].min()# meaningless make it non-zore min??
-
+    avgpop3d,   avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
+    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    
+    
     return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d,  avgh, mse_pop_h, mse_2d_3d, jcr_pop_h, jcr_2d_3d)
 
 def print_file(cityID):
