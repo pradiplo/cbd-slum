@@ -11,6 +11,7 @@ import shutil
 import pandas as pd
 import numpy as np
 from pysal.explore import inequality
+from pysal.lib import cg
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
@@ -129,6 +130,33 @@ def citywise_job(rasfile, geoser, cityID="", removefile=True, check_pixel=True):
     
      return cell
 
+def getXY(pt):
+    return (pt.x, pt.y)
+
+def get_eta(gdf,col_name):
+    thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
+    centroidseries = gdf["geometry"].centroid
+    x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
+    matpos = np.array([x,y]).transpose()
+    d = cg.distance_matrix(matpos)
+    eucl = np.maximum(d, d.transpose())
+    gdf_dict = gdf[col_name].to_dict()
+    s = [(k, gdf_dict[k]) for k in sorted(gdf_dict, key=gdf_dict.get)]
+    keys = []
+    vals = []
+    for k,v in s:
+        keys.append(k)
+        vals.append(v)
+    vals = np.array(vals)
+    keys = np.array(keys)
+    loubar_keys = keys[vals>=thres]
+    dist_mat =  eucl[keys.reshape(-1,1), keys]
+    dist_corr = dist_mat[dist_mat>0]
+    loubar_dist_mat = eucl[loubar_keys.reshape(-1,1), loubar_keys]
+    loubar_dist_corr = loubar_dist_mat[loubar_dist_mat>0]
+    eta = loubar_dist_corr.mean()/dist_corr.mean()
+    return eta
+
 def get_gini(gdf,col_name):
     g15 = inequality.gini.Gini(gdf[col_name].values)
     gmax = (len(gdf) - 1) / len(gdf)
@@ -169,18 +197,21 @@ def mean_center(points, w=None):
         return np.dot(w, points)[0]
     else:
         return points.mean(axis=0)
+    
 def calc_loubar_threshold(gdf,raster_val):
         lourank = int(len(gdf)*(1 - gdf[raster_val].mean()/max(gdf[raster_val])))
         gdf_rank = gdf.sort_values(by=[raster_val],ascending=True).reset_index(drop=True)
         return gdf_rank.loc[lourank][raster_val]
+
 def get_jcr_hot(gdf, col1, col2):
     from sklearn.metrics import jaccard_score as js
     gdf=gdf.astype({col1:float, col2:float})
     #gdf[col1]=gdf[col1].astype(float)
     #gdf[col2]=gdf[col2].astype(float)
-    ar1=(gdf[col1]>= calc_loubar_threshold(gdf, col1)).replace({True:1, False:0})
-    ar2=(gdf[col2]>= calc_loubar_threshold(gdf, col2)).replace({True:1, False:0})
+    ar1=(gdf[col1]>= gdf[col1].mean()).replace({True:1, False:0})
+    ar2=(gdf[col2]>= gdf[col2].mean()).replace({True:1, False:0})
     return js(ar1.to_numpy(), ar2.to_numpy())
+
 #calc moran I/spreading index for raster vals just for fun? 
 def get_cell(cityID):
     name=city[city.eFUA_ID==cityID].eFUA_name
@@ -210,8 +241,10 @@ def calc_aggregate(cityID):
     cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
+
     mse_pop_h = get_difference(cellHP,"Pval","Hval")
     mse_2d_3d = get_difference(cellHP[cellHP["3d_dens"].notna()],"Pval","3d_dens")
+
     jcr_pop_h  =  get_jcr_hot(cellHP, "Pval", "Hval")
     jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
 
@@ -219,11 +252,15 @@ def calc_aggregate(cityID):
     gini_h = get_gini(cellHP,"Hval")
     gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
-    avgpop3d,   avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
-    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
-    
+    #spr_pop = get_eta(cellHP,"Pval")
+    #spr_h = get_eta(cellHP,"Hval")
+    #spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") # ini gabisa, kena index error
+
+    avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
+    #maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
     return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d,  avgh, mse_pop_h, mse_2d_3d, jcr_pop_h, jcr_2d_3d)
+
 
 def print_file(cityID):
     cellHP = get_cell(cityID)
@@ -235,31 +272,22 @@ ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
-city=gpd.read_file(ghsfua)
-city = city.sort_values("FUA_p_2015").tail(200)
+city = gpd.read_file(ghsfua)
+city = city.sort_values("FUA_p_2015") #.head(100)
 city = city.set_index("eFUA_ID",drop=False)
-city = city.sample(n=2)
+#city = city.sample(n=2)
 
 #for running in cluster with SLURM
+num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
 
-#num_cores= int(os.environ['SLURM_CPUS_PER_TASK']
-num_cores=1
+#num_cores=1
 
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
 results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx) for (idx) in tqdm(city.eFUA_ID))
-print(results)
-
-#print(city_res)
-
-#city_res.to_file("./data/hthr25-65.json",driver="GeoJSON")
-
-"""
-city_res = city.join(pd.DataFrame(results, columns=["index","cbd_areas","gini_pop","gini_h","gini_3dpop","avgpop3d","maxpop3d","minpop3d","avgh","jcrd_pop_h","jcrd_2d_3d"]).set_index("index"))
+city_res = city.join(pd.DataFrame(results, columns=["cityID", "cbd_areas", "gini_pop", "gini_h", "gini_3dpop","avgpop3d",  "avgh", "mse_pop_h", "mse_2d_3d", "jcr_pop_h", "jcr_2d_3d"]).set_index("cityID"))
 city_res = city_res.drop("eFUA_ID",axis=1)
-city_res[["cbd_a_25","cbd_a_35","cbd_a_45","cbd_a_55","cbd_a_65"]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
+city_res[["cbd_a_15","cbd_a_25","cbd_a_35","cbd_a_45","cbd_a_55","cbd_a_65"]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
 city_res = city_res.drop("cbd_areas",axis=1)
-results = Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in tqdm(city.eFUA_ID))
-
-"""
+city_res.to_file("./data/hthr25-65-0630.json",driver="GeoJSON")
 
