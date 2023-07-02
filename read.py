@@ -14,7 +14,8 @@ from pysal.explore import inequality
 from pysal.lib import cg
 from joblib import Parallel, delayed
 from tqdm import tqdm
-
+from datetime import date
+today = date.today().strftime("%d_%m_%Y")
 pd.options.mode.chained_assignment = None 
 
 gdal.UseExceptions()
@@ -22,9 +23,8 @@ gdal.UseExceptions()
 project='EPSG:4326'
 
 def shaderxy_plot(df, x, y, z, cmap, how="log"):
-    import datashader as ds, pandas as pd, colorcet
+    import datashader as ds
     from matplotlib import cm
-    #df  = pd.read_csv('census.csv')
     cvs = ds.Canvas(plot_width=850, plot_height=500)
     agg = cvs.points(df, x, y, agg=ds.mean(z))
     img = ds.tf.shade(agg, cmap=vars(cm)[cmap], how=how)
@@ -134,6 +134,8 @@ def getXY(pt):
     return (pt.x, pt.y)
 
 def get_eta(gdf,col_name):
+    gdf=gdf.copy()
+    gdf=gdf.reset_index(drop=True)
     thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
     centroidseries = gdf["geometry"].centroid
     x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
@@ -206,15 +208,13 @@ def calc_loubar_threshold(gdf,raster_val):
 def get_jcr_hot(gdf, col1, col2):
     from sklearn.metrics import jaccard_score as js
     gdf=gdf.astype({col1:float, col2:float})
-    #gdf[col1]=gdf[col1].astype(float)
-    #gdf[col2]=gdf[col2].astype(float)
     ar1=(gdf[col1]>= gdf[col1].mean()).replace({True:1, False:0})
     ar2=(gdf[col2]>= gdf[col2].mean()).replace({True:1, False:0})
     return js(ar1.to_numpy(), ar2.to_numpy())
 
-#calc moran I/spreading index for raster vals just for fun? 
+
 def get_cell(cityID):
-    name=city[city.eFUA_ID==cityID].eFUA_name
+    #name=city[city.eFUA_ID==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
     geoser=city[city.eFUA_ID==cityID].geometry
     ####### intinya!!
@@ -234,10 +234,11 @@ def get_cell(cityID):
         print(cityID, "has different h and p cropped-raster data")
         return 0
 
-def calc_aggregate(cityID):
+def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
+    vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
     cellHP = get_cell(cityID)
     
-    h_thrs = [15,25,35,45,55,65]
+    
     cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
@@ -252,15 +253,20 @@ def calc_aggregate(cityID):
     gini_h = get_gini(cellHP,"Hval")
     gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
-    #spr_pop = get_eta(cellHP,"Pval")
-    #spr_h = get_eta(cellHP,"Hval")
-    #spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") # ini gabisa, kena index error
+    spr_pop = get_eta(cellHP,"Pval")
+    spr_h = get_eta(cellHP,"Hval")
+    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
 
     avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
-    #maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
-    return (cityID, cbd_areas, gini_pop, gini_h, gini_3dpop, avgpop3d,  avgh, mse_pop_h, mse_2d_3d, jcr_pop_h, jcr_2d_3d)
-
+    local_vars=locals() # a dict of local variable in this function 
+                        #(at this line so far)
+    rets= {k: v for k, v in local_vars.items() if k not in vars2exclude}
+    #make return variable (kecuali yang string namenya ada di vars2exclude)
+    #next time gausah make col name "string" yg  mendokusai 
+    #col name in dataframe of city_res bakal just as defined in this def !!!
+    return rets
 
 def print_file(cityID):
     cellHP = get_cell(cityID)
@@ -269,25 +275,29 @@ def print_file(cityID):
 
 #ok
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
+h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+
+
 
 city = gpd.read_file(ghsfua)
-city = city.sort_values("FUA_p_2015") #.head(100)
+city = city.sort_values("FUA_p_2015").sample(100)
 city = city.set_index("eFUA_ID",drop=False)
-#city = city.sample(n=2)
+
 
 #for running in cluster with SLURM
-num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
 
-#num_cores=1
-
+num_cores=-1
+h_thrs=[15,25,35,45,55,65] #define h trsh first 
+#(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
-results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx) for (idx) in tqdm(city.eFUA_ID))
-city_res = city.join(pd.DataFrame(results, columns=["cityID", "cbd_areas", "gini_pop", "gini_h", "gini_3dpop","avgpop3d",  "avgh", "mse_pop_h", "mse_2d_3d", "jcr_pop_h", "jcr_2d_3d"]).set_index("cityID"))
+results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in tqdm(city.eFUA_ID))
+
+city_res = city.join(pd.DataFrame(results).set_index("cityID"))
 city_res = city_res.drop("eFUA_ID",axis=1)
-city_res[["cbd_a_15","cbd_a_25","cbd_a_35","cbd_a_45","cbd_a_55","cbd_a_65"]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
+city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
 city_res = city_res.drop("cbd_areas",axis=1)
-city_res.to_file("./data/hthr25-65-0630.json",driver="GeoJSON")
+city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
 
