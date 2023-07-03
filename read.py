@@ -134,8 +134,8 @@ def getXY(pt):
     return (pt.x, pt.y)
 
 def get_eta(gdf,col_name):
-    gdf=gdf.copy()
-    gdf=gdf.reset_index(drop=True)
+    #gdf=gdf.copy()
+    gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
     thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
     centroidseries = gdf["geometry"].centroid
     x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
@@ -233,11 +233,17 @@ def get_cell(cityID):
     else:
         print(cityID, "has different h and p cropped-raster data")
         return 0
+def print_file_for_stats(cellHP, cityID, path="./data/cell_files"):
+    ada = os.path.exists(path)
+    if not ada :
+       os.makedirs(path)
+    cellHP[["Pval", "Hval", "3d_dens"]].to_csv(f"{path}/cell_"  + str(cityID) + ".csv")
+    return 0
 
 def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
     cellHP = get_cell(cityID)
-    
+   
     
     cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -266,24 +272,28 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     #make return variable (kecuali yang string namenya ada di vars2exclude)
     #next time gausah make col name "string" yg  mendokusai 
     #col name in dataframe of city_res bakal just as defined in this def !!!
-    return rets
+    print_file_for_stats(cellHP, cityID)
+    return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
+
+
+
+
 
 def print_file(cityID):
     cellHP = get_cell(cityID)
     cellHP.to_file("./data/cell_files/cell_"  + str(cityID) + ".json",driver="GeoJSON")
     return 0
 
-#ok
+
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
-
-city = gpd.read_file(ghsfua)
-city = city.sort_values("FUA_p_2015").sample(100)
+city = gpd.read_file(ghsfua).sort_values("FUA_p_2015")
+city = city.head(300)
+#city = city.sample(10).sort_values("FUA_p_2015")
 city = city.set_index("eFUA_ID",drop=False)
-
 
 #for running in cluster with SLURM
 #num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
@@ -293,9 +303,9 @@ h_thrs=[15,25,35,45,55,65] #define h trsh first
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
-results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in tqdm(city.eFUA_ID))
+results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.eFUA_ID)
 
-city_res = city.join(pd.DataFrame(results).set_index("cityID"))
+city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
 city_res = city_res.drop("eFUA_ID",axis=1)
 city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
 city_res = city_res.drop("cbd_areas",axis=1)

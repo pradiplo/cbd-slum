@@ -14,6 +14,9 @@ import scipy
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
+
+
 def scale(ser):
     ser -= ser.min()
     ser /= ser.max()
