@@ -17,6 +17,8 @@ from tqdm import tqdm
 from datetime import date
 today = date.today().strftime("%d_%m_%Y")
 pd.options.mode.chained_assignment = None 
+import warnings
+
 
 gdal.UseExceptions()
 
@@ -137,7 +139,9 @@ def get_eta(gdf,col_name):
     #gdf=gdf.copy()
     gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
     thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
-    centroidseries = gdf["geometry"].centroid
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
+        centroidseries = gdf["geometry"].centroid
     x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
     matpos = np.array([x,y]).transpose()
     d = cg.distance_matrix(matpos)
@@ -276,13 +280,49 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
+def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
+    
+        
+    vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
+    cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
+    
+    
+    cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
+    cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
+    #get diff 
 
+    mse_pop_h = get_difference(cellHP,"Pval","Hval")
+    mse_2d_3d = get_difference(cellHP[cellHP["3d_dens"].notna()],"Pval","3d_dens")
+
+    jcr_pop_h  =  get_jcr_hot(cellHP, "Pval", "Hval")
+    jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
+
+    gini_pop = get_gini(cellHP,"Pval")
+    gini_h = get_gini(cellHP,"Hval")
+    gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
+
+    spr_pop = get_eta(cellHP,"Pval")
+    spr_h = get_eta(cellHP,"Hval")
+    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
+
+    avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
+    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    
+    local_vars=locals() # a dict of local variable in this function 
+                        #(at this line so far)
+    rets= {k: v for k, v in local_vars.items() if k not in vars2exclude}
+    #make return variable (kecuali yang string namenya ada di vars2exclude)
+    #next time gausah make col name "string" yg  mendokusai 
+    #col name in dataframe of city_res bakal just as defined in this def !!!
+    return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
 def print_file(cityID):
     cellHP = get_cell(cityID)
+
     cellHP.to_file("./data/cell_files/cell_"  + str(cityID) + ".json",driver="GeoJSON")
     return 0
+
 
 
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
@@ -291,23 +331,61 @@ p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsfua).sort_values("FUA_p_2015")
-city = city.head(300)
+city = city.head(30)
 #city = city.sample(10).sort_values("FUA_p_2015")
 city = city.set_index("eFUA_ID",drop=False)
 
 #for running in cluster with SLURM
 #num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
-
 num_cores=-1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
-results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.eFUA_ID)
 
-city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
-city_res = city_res.drop("eFUA_ID",axis=1)
-city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
-city_res = city_res.drop("cbd_areas",axis=1)
-city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
+def implementation_1():
+    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.eFUA_ID)
+    
+    city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
+    city_res = city_res.drop("eFUA_ID",axis=1)
+    city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
+    city_res = city_res.drop("cbd_areas",axis=1)
+    city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
+
+def implementation_2():
+    Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.eFUA_ID)
+    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, h_thrs) for (idx) in city.eFUA_ID)
+    
+    city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
+    city_res = city_res.drop("eFUA_ID",axis=1)
+    city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
+    city_res = city_res.drop("cbd_areas",axis=1)
+    city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
+    
+def test():
+    import timeit
+    import tracemalloc
+
+    tracemalloc.start()
+    start = timeit.default_timer()
+    implementation_1()
+    stop = timeit.default_timer()
+    
+    print('Ver 1 Time: ', stop - start)  
+    print('Ver 1 Mem: ', tracemalloc.get_traced_memory())
+    tracemalloc.stop()
+    
+    tracemalloc.start()
+    start = timeit.default_timer()
+    implementation_2()
+    stop = timeit.default_timer()
+    
+    print('Ver 2 Time: ', stop - start)  
+    print('Ver 2 Mem: ', tracemalloc.get_traced_memory())
+    tracemalloc.stop()
+
+if __name__ == '__main__':
+    test()
+    
+
 
