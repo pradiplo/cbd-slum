@@ -313,8 +313,9 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     
         
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
-    cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
     
+    #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
+    cellHP = read_compressed("./data/cell_files/cell_"  + str(cityID) + ".gz")
     
     cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -326,9 +327,9 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     jcr_pop_h  =  get_jcr_hot(cellHP, "Pval", "Hval")
     jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
 
-    gini_pop = get_gini(cellHP,"Pval")
-    gini_h = get_gini(cellHP,"Hval")
-    gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
+    #gini_pop = get_gini(cellHP,"Pval")
+    #gini_h = get_gini(cellHP,"Hval")
+    #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
     spr_pop = get_eta(cellHP,"Pval")
     spr_h = get_eta(cellHP,"Hval")
@@ -339,10 +340,11 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
         spr_3dpop = -1
 
     avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
-    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    maxpop3d,  maxh  = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
     local_vars=locals() # a dict of local variable in this function 
                         #(at this line so far)
+                        
     rets= {k: v for k, v in local_vars.items() if k not in vars2exclude}
     #make return variable (kecuali yang string namenya ada di vars2exclude)
     #next time gausah make col name "string" yg  mendokusai 
@@ -380,7 +382,7 @@ def implementation_1():
     city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
 
 def implementation_2():
-    Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.eFUA_ID)
+    #Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.eFUA_ID)
     results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, h_thrs) for (idx) in city.eFUA_ID)
     
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
