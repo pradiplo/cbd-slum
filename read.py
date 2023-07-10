@@ -8,6 +8,8 @@ os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx 
 import shutil
+import pickle
+import gzip
 import pandas as pd
 import numpy as np
 from pysal.explore import inequality
@@ -160,7 +162,10 @@ def get_eta(gdf,col_name):
     dist_corr = dist_mat[dist_mat>0]
     loubar_dist_mat = eucl[loubar_keys.reshape(-1,1), loubar_keys]
     loubar_dist_corr = loubar_dist_mat[loubar_dist_mat>0]
-    eta = loubar_dist_corr.mean()/dist_corr.mean()
+    if len(loubar_dist_corr) > 0 and len(dist_corr) >0:
+        eta = loubar_dist_corr.mean()/dist_corr.mean()
+    else:
+        eta = -1     
     return eta
 
 def get_gini(gdf,col_name):
@@ -237,12 +242,36 @@ def get_cell(cityID):
     else:
         print(cityID, "has different h and p cropped-raster data")
         return 0
+
 def print_file_for_stats(cellHP, cityID, path="./data/cell_files"):
     ada = os.path.exists(path)
     if not ada :
        os.makedirs(path)
     cellHP[["Pval", "Hval", "3d_dens"]].to_csv(f"{path}/cell_"  + str(cityID) + ".csv")
     return 0
+
+def print_file(cityID):
+    save_path = "./data/cell_files/cell_"  + str(cityID) + ".gz"
+    cellHP = get_cell(cityID)
+    data = cellHP.to_dict()
+    compressed_data = pickle.dumps(data)
+    compressed_data = gzip.compress(compressed_data)
+    with open(save_path, 'wb') as f:
+        f.write(compressed_data)
+    return 0
+
+def read_compressed(path): #buat buka file .gz di atas wk
+    with open(path, 'rb') as f:
+        compressed_data = f.read()
+
+    # Decompress data using gzip and pickle
+    decompressed_data = gzip.decompress(compressed_data)
+    data = pickle.loads(decompressed_data)
+    #print(data)
+    gdf = gpd.GeoDataFrame.from_dict(data)
+   
+    return gdf
+
 
 def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
@@ -261,14 +290,14 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
 
     gini_pop = get_gini(cellHP,"Pval")
     gini_h = get_gini(cellHP,"Hval")
-    gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
+    #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
     spr_pop = get_eta(cellHP,"Pval")
     spr_h = get_eta(cellHP,"Hval")
     spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
 
     avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
-    maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    #maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
     local_vars=locals() # a dict of local variable in this function 
                         #(at this line so far)
@@ -303,7 +332,11 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
 
     spr_pop = get_eta(cellHP,"Pval")
     spr_h = get_eta(cellHP,"Hval")
-    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
+
+    if len(cellHP[cellHP["3d_dens"].notna()]) > 0:
+        spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
+    else:
+        spr_3dpop = -1
 
     avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
     maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
@@ -317,27 +350,21 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
-def print_file(cityID):
-    cellHP = get_cell(cityID)
-
-    cellHP.to_file("./data/cell_files/cell_"  + str(cityID) + ".json",driver="GeoJSON")
-    return 0
-
 
 
 ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsfua).sort_values("FUA_p_2015")
-city = city.head(30)
+#city = city.head(30)
 #city = city.sample(10).sort_values("FUA_p_2015")
 city = city.set_index("eFUA_ID",drop=False)
 
 #for running in cluster with SLURM
-#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
-num_cores=-1
+num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+#num_cores=-1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
@@ -367,13 +394,14 @@ def test():
     import tracemalloc
 
     tracemalloc.start()
-    start = timeit.default_timer()
-    implementation_1()
-    stop = timeit.default_timer()
+    #start = timeit.default_timer()
+    #implementation_1()
+    #stop = timeit.default_timer()
     
-    print('Ver 1 Time: ', stop - start)  
-    print('Ver 1 Mem: ', tracemalloc.get_traced_memory())
-    tracemalloc.stop()
+    
+    #print('Ver 1 Time: ', stop - start)  
+    #print('Ver 1 Mem: ', tracemalloc.get_traced_memory())
+    #tracemalloc.stop()
     
     tracemalloc.start()
     start = timeit.default_timer()
@@ -385,7 +413,6 @@ def test():
     tracemalloc.stop()
 
 if __name__ == '__main__':
-    test()
-    
-
+    #test()
+    implementation_2()
 
