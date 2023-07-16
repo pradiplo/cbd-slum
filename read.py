@@ -137,6 +137,35 @@ def citywise_job(rasfile, geoser, cityID="", removefile=True, check_pixel=True):
 def getXY(pt):
     return (pt.x, pt.y)
 
+def calculate_distance_matrix(points):
+    from scipy.spatial import distance
+    num_points = points.shape[0]
+    dist_matrix = np.zeros((num_points, num_points))
+    #print(num_points)
+    for i in range(num_points):
+        for j in range(i+1, num_points):
+            #distance = np.linalg.norm(points[i] - points[j])
+            #print(points[i])
+            distance_val = distance.euclidean(points[i], points[j])
+            #print(distance_val)
+            dist_matrix[i, j] = distance_val
+            #dist_matrix[j, i] = distance_val
+
+    return dist_matrix + dist_matrix.T
+
+def calculate_avg_dist(points):
+    from scipy.spatial import distance
+    num_points = points.shape[0]
+    distances = 0
+    #counter = 0
+    pair_num= num_points*(num_points-1)/2
+    for i in tqdm(range(1,num_points),desc="outer",position=0):
+        for j in range(i):
+            distance_val = distance.euclidean(points[i], points[j]) / 1000.0 #in km?
+            distances += distance_val
+            #counter += 1
+    return distances/pair_num
+
 def get_eta(gdf,col_name):
     #gdf=gdf.copy()
     gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
@@ -146,7 +175,9 @@ def get_eta(gdf,col_name):
         centroidseries = gdf["geometry"].centroid
     x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
     matpos = np.array([x,y]).transpose()
-    d = cg.distance_matrix(matpos)
+    #d = cg.distance_matrix(matpos,threshold=1e6)
+    print("calculating distance matrix..")
+    d = calculate_distance_matrix(matpos)
     eucl = np.maximum(d, d.transpose())
     gdf_dict = gdf[col_name].to_dict()
     s = [(k, gdf_dict[k]) for k in sorted(gdf_dict, key=gdf_dict.get)]
@@ -166,6 +197,24 @@ def get_eta(gdf,col_name):
         eta = loubar_dist_corr.mean()/dist_corr.mean()
     else:
         eta = -1     
+    return eta
+
+def new_eta(gdf,col_name):
+    gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
+        centroidseries = gdf["geometry"].centroid
+    x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
+    gdf["x"] = x
+    gdf["y"] = y
+    city_rad = np.sqrt( np.power((gdf["x"].max() - gdf["x"].min()),2)  + np.power((gdf["y"].max() - gdf["y"].min()),2) ) / 1000.0
+    thres =  gdf[col_name].mean()
+    hotspot = gdf[gdf[col_name] > thres]
+    #print(len(hotspot)/len(gdf))
+    hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
+    #print("Calculating avg dist between hotspot..")
+    hotspot_dist = calculate_avg_dist(hotspot_pos)
+    eta =  hotspot_dist/ city_rad
     return eta
 
 def get_gini(gdf,col_name):
@@ -223,9 +272,9 @@ def get_jcr_hot(gdf, col1, col2):
 
 
 def get_cell(cityID):
-    #name=city[city.eFUA_ID==cityID].eFUA_name
+    #name=city[city.ID_HDC_G0==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
-    geoser=city[city.eFUA_ID==cityID].geometry
+    geoser=city[city.ID_HDC_G0==cityID].geometry
     ####### intinya!!
     cellH=citywise_job(h, geoser, cityID, removefile=True, check_pixel=False)
     cellP=citywise_job(p, geoser, cityID, removefile=True, check_pixel=False)
@@ -243,7 +292,7 @@ def get_cell(cityID):
         print(cityID, "has different h and p cropped-raster data")
         return 0
 
-def print_file_for_stats(cellHP, cityID, path="./data/cell_files"):
+def print_file_for_stats(cellHP, cityID, path="./data/cell_files_uc"):
     ada = os.path.exists(path)
     if not ada :
        os.makedirs(path)
@@ -251,7 +300,7 @@ def print_file_for_stats(cellHP, cityID, path="./data/cell_files"):
     return 0
 
 def print_file(cityID):
-    save_path = "./data/cell_files/cell_"  + str(cityID) + ".gz"
+    save_path = "./data/cell_files_uc/cell_"  + str(cityID) + ".gz"
     cellHP = get_cell(cityID)
     data = cellHP.to_dict()
     compressed_data = pickle.dumps(data)
@@ -315,7 +364,7 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
     
     #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
-    cellHP = read_compressed("./data/cell_files/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
     
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -331,8 +380,8 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
 
-    #spr_pop = get_eta(cellHP,"Pval")
-    #spr_h = get_eta(cellHP,"Hval")
+    spr_pop = new_eta(cellHP,"Pval")
+    spr_h = new_eta(cellHP,"Hval")
 
    # if len(cellHP[cellHP["3d_dens"].notna()]) > 0:
     #    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
@@ -342,6 +391,7 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
 
     if len(cropped) > 4:
         avgpop3d,  avgh  = cropped["3d_dens"].mean(), cropped["Hval"].mean()
+        infpercap = (sum(cellHP["Hval"])*1e4) / sum(cellHP["Pval"])
     else:
         avgpop3d,avgh = -1,-1    
     #maxpop3d,  maxh  = cellHP["3d_dens"].max(), cellHP["Hval"].max()
@@ -356,41 +406,39 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
-
-
-ghsfua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
-city = gpd.read_file(ghsfua).sort_values("FUA_p_2015")
-#city = city.head(30)
-#city = city.sample(10).sort_values("FUA_p_2015")
-city = city.set_index("eFUA_ID",drop=False)
+city = gpd.read_file(ghsuc).sort_values("P15")
+city = city.tail(2)
+#city = city.sample(10).sort_values("P15")
+city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
-num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
-#num_cores=-1
+#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+num_cores=1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
 
 def implementation_1():
-    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.eFUA_ID)
+    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.ID_HDC_G0)
     
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
-    city_res = city_res.drop("eFUA_ID",axis=1)
+    city_res = city_res.drop("ID_HDC_G0",axis=1)
     #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
     #city_res = city_res.drop("cbd_areas",axis=1)
     city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
 
 def implementation_2():
-    #Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.eFUA_ID)
-    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, h_thrs) for (idx) in city.eFUA_ID)
+    #Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.ID_HDC_G0)
+    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, h_thrs) for (idx) in city.ID_HDC_G0)
     
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
-    city_res = city_res.drop("eFUA_ID",axis=1)
+    city_res = city_res.drop("ID_HDC_G0",axis=1)
     print(city_res)
     #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
     #city_res = city_res.drop("cbd_areas",axis=1)
@@ -400,7 +448,7 @@ def test():
     import timeit
     import tracemalloc
 
-    tracemalloc.start()
+    #tracemalloc.start()
     #start = timeit.default_timer()
     #implementation_1()
     #stop = timeit.default_timer()
@@ -420,6 +468,6 @@ def test():
     tracemalloc.stop()
 
 if __name__ == '__main__':
-    #test()
-    implementation_2()
+    test()
+    #implementation_2()
 
