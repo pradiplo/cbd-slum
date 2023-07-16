@@ -2,7 +2,7 @@ from osgeo import gdal
 from osgeo import ogr
 import rasterio
 import rasterio.mask as RM
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import os
 os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
@@ -13,17 +13,19 @@ import gzip
 import pandas as pd
 import numpy as np
 from pysal.explore import inequality
-from pysal.lib import cg
+#from pysal.lib import cg
 from joblib import Parallel, delayed
-from tqdm import tqdm
+#from tqdm import tqdm
 from datetime import date
 today = date.today().strftime("%d_%m_%Y")
 pd.options.mode.chained_assignment = None 
 import warnings
+import timeit
+import tracemalloc
+from itertools import combinations
 
 
 gdal.UseExceptions()
-
 project='EPSG:4326'
 
 def shaderxy_plot(df, x, y, z, cmap, how="log"):
@@ -111,7 +113,7 @@ def main_raster2polypoint(rasterfn,outSHPfn, bufferm=50):
     array = raster2array(rasterfn)
     array2shp(array,outSHPfn,rasterfn)
     d=gpd.read_file(outSHPfn)
-    d=d.set_crs( get_raster_crs(rasterfn))
+    d=d.set_crs(get_raster_crs(rasterfn))
     if d.crs.is_projected == False:
         d=osmnx.project_gdf(d)
     d["x"]=d.geometry.x
@@ -153,18 +155,28 @@ def calculate_distance_matrix(points):
 
     return dist_matrix + dist_matrix.T
 
-def calculate_avg_dist(points):
+def calculate_avg_dist_loop(points):
     from scipy.spatial import distance
+    combos=combinations(points,2)
     num_points = points.shape[0]
-    distances = 0
-    #counter = 0
     pair_num= num_points*(num_points-1)/2
-    for i in tqdm(range(1,num_points),desc="outer",position=0):
-        for j in range(i):
-            distance_val = distance.euclidean(points[i], points[j]) / 1000.0 #in km?
-            distances += distance_val
-            #counter += 1
+    distances=sum(distance.euclidean(p[0], p[-1]) for p in combos) #sum (bla3) lebih cepat drpd sum(list) dan for loop
     return distances/pair_num
+
+
+def calculate_avg_dist_chunk(points):
+    from sklearn.metrics import pairwise_distances_chunked #returning generator of arr (i, .......j) daripada pdist arr (I, J) 
+    num_points = points.shape[0]                   # sum of sum of each chunks == sum of full box/arr -> /2 = non dup pair sum
+    def reduce_func(D_chunk, start):
+        sums = [sum(d) for d in D_chunk]
+        return sums
+    pair_num= num_points*(num_points-1)/2
+    p=pairwise_distances_chunked(points, reduce_func=reduce_func)
+    distances=sum(sum(a) for a in p)/2  # setengah isi kotak= sum o unique pair dist 
+
+    return distances/pair_num
+       
+
 
 def get_eta(gdf,col_name):
     #gdf=gdf.copy()
@@ -172,7 +184,7 @@ def get_eta(gdf,col_name):
     thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
     with warnings.catch_warnings():
         warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
-        centroidseries = gdf["geometry"].centroid
+        centroidseries = gdf.centroid
     x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
     matpos = np.array([x,y]).transpose()
     #d = cg.distance_matrix(matpos,threshold=1e6)
@@ -198,24 +210,24 @@ def get_eta(gdf,col_name):
     else:
         eta = -1     
     return eta
-
+#cellHP=cellHP[cellHP["Hval"] > 3 ]
 def new_eta(gdf,col_name):
     gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
-        centroidseries = gdf["geometry"].centroid
-    x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
-    gdf["x"] = x
-    gdf["y"] = y
-    city_rad = np.sqrt( np.power((gdf["x"].max() - gdf["x"].min()),2)  + np.power((gdf["y"].max() - gdf["y"].min()),2) ) / 1000.0
+    #with warnings.catch_warnings():
+     #   warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
+     #   centroidseries = gdf["geometry"].centroid
+    #x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
+    #gdf["x"] = x
+    #gdf["y"] = y
+    city_rad = np.sqrt( np.power((gdf["x"].max() - gdf["x"].min()),2)  + np.power((gdf["y"].max() - gdf["y"].min()),2) )# / 1000.0
     thres =  gdf[col_name].mean()
     hotspot = gdf[gdf[col_name] > thres]
-    #print(len(hotspot)/len(gdf))
     hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
-    #print("Calculating avg dist between hotspot..")
-    hotspot_dist = calculate_avg_dist(hotspot_pos)
+    print("Calculating avg dist between hotspot..")
+    hotspot_dist = calculate_avg_dist_chunk(hotspot_pos)
     eta =  hotspot_dist/ city_rad
     return eta
+
 
 def get_gini(gdf,col_name):
     g15 = inequality.gini.Gini(gdf[col_name].values)
@@ -274,7 +286,7 @@ def get_jcr_hot(gdf, col1, col2):
 def get_cell(cityID):
     #name=city[city.ID_HDC_G0==cityID].eFUA_name
     #print("city id", (cityID,name.values[0]))
-    geoser=city[city.ID_HDC_G0==cityID].geometry
+    geoser=city[city.index==cityID].geometry
     ####### intinya!!
     cellH=citywise_job(h, geoser, cityID, removefile=True, check_pixel=False)
     cellP=citywise_job(p, geoser, cityID, removefile=True, check_pixel=False)
@@ -310,15 +322,25 @@ def print_file(cityID):
     return 0
 
 def read_compressed(path): #buat buka file .gz di atas wk
+    
+    
+   
     with open(path, 'rb') as f:
         compressed_data = f.read()
-
+        
+    
     # Decompress data using gzip and pickle
-    decompressed_data = gzip.decompress(compressed_data)
+        decompressed_data = gzip.decompress(compressed_data)
+    
+    
+   # import pygeos as sp
+    
     data = pickle.loads(decompressed_data)
-    #print(data)
-    gdf = gpd.GeoDataFrame.from_dict(data)
+        
    
+        #print(data)
+    gdf = gpd.GeoDataFrame.from_dict(data)
+
     return gdf
 
 
@@ -360,11 +382,11 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
 
 def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     
-        
+
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
     
     #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
-    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files/cell_"  + str(cityID) + ".gz")
     
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -405,16 +427,25 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     #col name in dataframe of city_res bakal just as defined in this def !!!
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
-
+#./data mesin koplo
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
+###./data mesin genta
+ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
+fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+
 
 city = gpd.read_file(ghsuc).sort_values("P15")
-city = city.tail(2)
+#city = gpd.read_file(fua).sort_values("FUA_p_2015")
+city = city.tail(5)
 #city = city.sample(10).sort_values("P15")
-city = city.set_index("ID_HDC_G0",drop=False)
+city=city.set_index("eFUA_ID", drop=False)
+cityID=city.index[-1]
+#city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
 #num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
@@ -445,19 +476,7 @@ def implementation_2():
     city_res.to_file(f"./data/avg3m_{today}.json",driver="GeoJSON")
     
 def test():
-    import timeit
-    import tracemalloc
 
-    #tracemalloc.start()
-    #start = timeit.default_timer()
-    #implementation_1()
-    #stop = timeit.default_timer()
-    
-    
-    #print('Ver 1 Time: ', stop - start)  
-    #print('Ver 1 Mem: ', tracemalloc.get_traced_memory())
-    #tracemalloc.stop()
-    
     tracemalloc.start()
     start = timeit.default_timer()
     implementation_2()
@@ -467,7 +486,41 @@ def test():
     print('Ver 2 Mem: ', tracemalloc.get_traced_memory())
     tracemalloc.stop()
 
-if __name__ == '__main__':
-    test()
+def test_eta():
+    import os
+    r=[]
+    new=[]
+    old=[]
+    for root, dirs, files in os.walk("./data/cell_files"):
+         for name in files:
+             if name.split(".")[-1]=="json":
+                 r.append(os.path.join(root, name))
+    for i in r:
+        cellHP=gpd.read_file(i)
+        cellHP=cellHP[cellHP["Hval"]>=3]
+        if len(cellHP)>0:
+            new.append(new_eta(cellHP,"Hval"))
+            old.append(get_eta(cellHP, "Hval"))
+    
+    #plt.scatter(old, new[0:len(old)])
+    #plt.xlabel("old")
+    #plt.ylabel("new")
+#if __name__ == '__main__':
+    #test()
+    
     #implementation_2()
+#cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
+#cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")
+
+
+#arbitary test
+path="/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_2262.0.gz"
+cellHP=read_compressed(path)
+cellHP=cellHP[cellHP["Hval"]>3]
+start=timeit.default_timer()
+eta=new_eta(cellHP.sample(100), "Hval")
+stop=timeit.default_timer()
+print(f"runtime with {len(cellHP)} data ={stop-start}")
+
+
 
