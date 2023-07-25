@@ -15,7 +15,7 @@ import numpy as np
 from pysal.explore import inequality
 #from pysal.lib import cg
 from joblib import Parallel, delayed
-#from tqdm import tqdm
+from tqdm import tqdm
 from datetime import date
 today = date.today().strftime("%d_%m_%Y")
 pd.options.mode.chained_assignment = None 
@@ -23,7 +23,7 @@ import warnings
 import timeit
 import tracemalloc
 from itertools import combinations
-
+import sklearn
 
 gdal.UseExceptions()
 project='EPSG:4326'
@@ -164,20 +164,18 @@ def calculate_avg_dist_loop(points):
     return distances/pair_num
 
 
-def calculate_avg_dist_chunk(points):
+def calculate_avg_dist_chunk(points,njobs):
     from sklearn.metrics import pairwise_distances_chunked #returning generator of arr (i, .......j) daripada pdist arr (I, J) 
     num_points = points.shape[0]                   # sum of sum of each chunks == sum of full box/arr -> /2 = non dup pair sum
     def reduce_func(D_chunk, start):
         sums = [sum(d) for d in D_chunk]
         return sums
     pair_num= num_points*(num_points-1)/2
-    p=pairwise_distances_chunked(points, reduce_func=reduce_func)
+    p=pairwise_distances_chunked(points, reduce_func=reduce_func, n_jobs=njobs)
     distances=sum(sum(a) for a in p)/2  # setengah isi kotak= sum o unique pair dist 
 
     return distances/pair_num
        
-
-
 def get_eta(gdf,col_name):
     #gdf=gdf.copy()
     gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
@@ -211,23 +209,26 @@ def get_eta(gdf,col_name):
         eta = -1     
     return eta
 #cellHP=cellHP[cellHP["Hval"] > 3 ]
-def new_eta(gdf,col_name):
-    gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
-    #with warnings.catch_warnings():
-     #   warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
-     #   centroidseries = gdf["geometry"].centroid
-    #x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
-    #gdf["x"] = x
-    #gdf["y"] = y
-    city_rad = np.sqrt( np.power((gdf["x"].max() - gdf["x"].min()),2)  + np.power((gdf["y"].max() - gdf["y"].min()),2) )# / 1000.0
-    thres =  gdf[col_name].mean()
-    hotspot = gdf[gdf[col_name] > thres]
-    hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
-    print("Calculating avg dist between hotspot..")
-    hotspot_dist = calculate_avg_dist_chunk(hotspot_pos)
-    eta =  hotspot_dist/ city_rad
-    return eta
 
+def new_eta(gdf,col_name,njob):
+    from scipy.spatial import distance
+    gdf=gdf.reset_index(drop=True) 
+    
+    arbi=[(gdf["x"].values[0], gdf["y"].values[0])]
+    denom=distance.cdist(arbi,  [(x, y) for x, y in zip(gdf.x, gdf.y)]).mean() 
+    # asumsikan gdf== lattice, traversal of one2all kyknya mirip2 aja
+    #-> one2all arbitari mewakili all2all dlm rata? & sama cepetnya sama radius calc
+
+    thres =  gdf[col_name].mean()
+    hotspot = gdf[gdf[col_name] >= thres]
+
+    if len(hotspot)>0:
+        hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
+        hotspot_dist = calculate_avg_dist_chunk(hotspot_pos,njob)
+        eta =  hotspot_dist/denom
+        return eta
+    else:
+        return -1
 
 def get_gini(gdf,col_name):
     g15 = inequality.gini.Gini(gdf[col_name].values)
@@ -322,9 +323,7 @@ def print_file(cityID):
     return 0
 
 def read_compressed(path): #buat buka file .gz di atas wk
-    
-    
-   
+ 
     with open(path, 'rb') as f:
         compressed_data = f.read()
         
@@ -380,18 +379,51 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
-def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
+
+def calc_aggr_large(cityID,njobs):
+    #print(cityID)
+    start = timeit.default_timer()
+    vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
+    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
     
+    spr_pop = new_eta(cellHP,"Pval",njobs)
+    spr_h = new_eta(cellHP,"Hval",njobs)
+
+   # if len(cellHP[cellHP["3d_dens"].notna()]) > 0:
+    #    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
+    #else:
+    #    spr_3dpop = -1
+    cropped = cellHP[cellHP["Hval"] > 3 ]
+
+    if len(cropped) > 4:
+        avgpop3d,  avgh  = cropped["3d_dens"].mean(), cropped["Hval"].mean()
+        infpercap = (sum(cellHP["Hval"])*1e4) / sum(cellHP["Pval"])
+    else:
+        avgpop3d,avgh = -1,-1    
+    #maxpop3d,  maxh  = cellHP["3d_dens"].max(), cellHP["Hval"].max()
+    
+    local_vars=locals() # a dict of local variable in this function 
+                        #(at this line so far)
+
+    rets= {k: v for k, v in local_vars.items() if k not in vars2exclude}
+    #make return variable (kecuali yang string namenya ada di vars2exclude)
+    #next time gausah make col name "string" yg  mendokusai 
+    #col name in dataframe of city_res bakal just as defined in this def !!!
+    stop= timeit.default_timer()
+    print('Calculation time: ', stop - start)  
+    return list(rets.items())
+
+
+# use this for pop < 5e6 ??
+def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
 
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
-    
     #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
-    cellHP = read_compressed("./data/cell_files/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
     
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
-
   #  mse_pop_h = get_difference(cellHP,"Pval","Hval")
   #  mse_2d_3d = get_difference(cellHP[cellHP["3d_dens"].notna()],"Pval","3d_dens")
 
@@ -401,9 +433,13 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     #gini_pop = get_gini(cellHP,"Pval")
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
-
-    spr_pop = new_eta(cellHP,"Pval")
-    spr_h = new_eta(cellHP,"Hval")
+    #print(cityID)
+    if len(cellHP["Pval"]) > 4 and len(cellHP["Hval"]) > 4 : 
+        spr_pop = new_eta(cellHP,"Pval",1)
+        spr_h = new_eta(cellHP,"Hval",1)
+    else:
+        spr_pop = -1
+        spr_h = -1    
 
    # if len(cellHP[cellHP["3d_dens"].notna()]) > 0:
     #    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
@@ -433,23 +469,32 @@ h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 ###./data mesin genta
-ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
-fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+#ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
+#fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+#p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsuc).sort_values("P15")
 #city = gpd.read_file(fua).sort_values("FUA_p_2015")
-city = city.tail(5)
+print(len(city))
+
+#city = city[city["P15"] < 1e6]
+print(len(city))
+city = city[city["P15"] >= 1e6]
+#city = city.head(2)
+#city = city.iloc[1000:]
 #city = city.sample(10).sort_values("P15")
-city=city.set_index("eFUA_ID", drop=False)
-cityID=city.index[-1]
-#city = city.set_index("ID_HDC_G0",drop=False)
+#city=city.set_index("eFUA_ID", drop=False)
+#cityID=city.index[-1]
+city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
-#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
-num_cores=1
+num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+mem = sklearn.get_config()['working_memory']
+#print(mem)
+#work_mem = (mem / (num_cores + 1))
+#num_cores=2
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
@@ -473,8 +518,19 @@ def implementation_2():
     print(city_res)
     #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
     #city_res = city_res.drop("cbd_areas",axis=1)
-    city_res.to_file(f"./data/avg3m_{today}.json",driver="GeoJSON")
-    
+    city_res.to_file(f"./data/avg3m_small_{today}.json",driver="GeoJSON")
+
+
+def implementation_large(num_cores):
+    #print(len(city))
+    results =[calc_aggr_large(idx,num_cores) for idx in tqdm(city.ID_HDC_G0)]
+    city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
+    city_res = city_res.drop("ID_HDC_G0",axis=1)
+    print(city_res)
+    #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
+    #city_res = city_res.drop("cbd_areas",axis=1)
+    city_res.to_file(f"./data/avg3m_large_{today}.json",driver="GeoJSON")
+
 def test():
 
     tracemalloc.start()
@@ -505,22 +561,22 @@ def test_eta():
     #plt.scatter(old, new[0:len(old)])
     #plt.xlabel("old")
     #plt.ylabel("new")
-#if __name__ == '__main__':
+if __name__ == '__main__':
     #test()
-    
     #implementation_2()
+    implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
 #cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")
 
 
 #arbitary test
-path="/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_2262.0.gz"
-cellHP=read_compressed(path)
-cellHP=cellHP[cellHP["Hval"]>3]
-start=timeit.default_timer()
-eta=new_eta(cellHP.sample(100), "Hval")
-stop=timeit.default_timer()
-print(f"runtime with {len(cellHP)} data ={stop-start}")
+#path="/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_2262.0.gz"
+#cellHP=read_compressed(path)
+#cellHP=cellHP[cellHP["Hval"]>3]
+#start=timeit.default_timer()
+#eta=new_eta(cellHP.sample(100), "Hval")
+#stop=timeit.default_timer()
+#print(f"runtime with {len(cellHP)} data ={stop-start}")
 
 
 
