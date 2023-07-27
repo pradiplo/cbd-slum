@@ -24,6 +24,9 @@ import timeit
 import tracemalloc
 from itertools import combinations
 import sklearn
+import quads
+import matplotlib.pyplot as plt
+import math
 
 gdal.UseExceptions()
 project='EPSG:4326'
@@ -463,6 +466,49 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     #col name in dataframe of city_res bakal just as defined in this def !!!
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
+
+def implement_quad(cityID):
+    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    quadtree(cellHP,"Hval")
+
+
+def quadtree(gdf,col_name):
+    #cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    #thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
+    thres =  gdf[col_name].mean()
+    #bbox = get_bbox(gdf)
+    hotspot = gdf[gdf[col_name] >= thres]
+    width = gdf.dissolve().bounds["maxx"].values - gdf.dissolve().bounds["minx"].values 
+    height = gdf.dissolve().bounds["maxy"].values - gdf.dissolve().bounds["miny"].values
+    #print(width)
+    cx = gdf.dissolve().centroid.x.values
+    cy = gdf.dissolve().centroid.y.values
+    if len(hotspot)>0:
+        points = np.array([hotspot["x"],hotspot["y"]]).transpose() #.astype("int16")
+        
+        tree = quads.QuadTree((cx[0],cy[0]),math.ceil(width[0]) + 1000,math.ceil(height[0]) + 1000)
+    
+        #tree = quads.QuadTree((-100, -110), 20, 20)
+        #tree.insert((3, 5))
+        #print(width/2)
+        #tree.insert((width/2, height/2))
+        #print(points.shape[0])
+        for i in range(points.shape[0]):
+            print(tuple(points[i,:]))
+            tree.insert(tuple(points[i,:]))
+        quads.visualize(tree)   
+        #tree.visualize()    
+        plt.show()
+        #bbox = [min(hotspot["x"]),max(hotspot["x"]),min(hotspot["y"]),max(hotspot["y"])]
+        #print(bbox)
+
+
+
+    else:
+        print("no hotspot")      
+
+
+
 #./data mesin koplo
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
 h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
@@ -477,24 +523,24 @@ p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_5
 
 city = gpd.read_file(ghsuc).sort_values("P15")
 #city = gpd.read_file(fua).sort_values("FUA_p_2015")
-print(len(city))
+#print(len(city))
 
-#city = city[city["P15"] < 1e6]
-print(len(city))
-city = city[city["P15"] >= 1e6]
+city = city[city["P15"] < 1e6]
+#print(len(city))
+#city = city[city["P15"] >= 1e6]
 #city = city.head(2)
 #city = city.iloc[1000:]
-#city = city.sample(10).sort_values("P15")
+city = city.sample(1).sort_values("P15")
 #city=city.set_index("eFUA_ID", drop=False)
 #cityID=city.index[-1]
 city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
-num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
-mem = sklearn.get_config()['working_memory']
+#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+#mem = sklearn.get_config()['working_memory']
 #print(mem)
 #work_mem = (mem / (num_cores + 1))
-#num_cores=2
+num_cores=1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
@@ -562,9 +608,10 @@ def test_eta():
     #plt.xlabel("old")
     #plt.ylabel("new")
 if __name__ == '__main__':
+    a = [implement_quad(i) for i in city.ID_HDC_G0]
     #test()
     #implementation_2()
-    implementation_large(num_cores)
+    #implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
 #cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")
 
