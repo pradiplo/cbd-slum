@@ -93,3 +93,6 @@ betas=radial_scaling(datas, y_col, start, num)
 betas["m"].plot()
 plt.show()
 betas.to_csv("betas_radial")
+
+
+#sasda
