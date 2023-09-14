@@ -12,8 +12,6 @@ import pickle
 import gzip
 import pandas as pd
 import numpy as np
-from pysal.explore import inequality
-#from pysal.lib import cg
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from datetime import date
@@ -24,9 +22,10 @@ import timeit
 import tracemalloc
 from itertools import combinations
 import sklearn
-import quads
 import matplotlib.pyplot as plt
 import math
+
+from sklearn.cluster import DBSCAN
 
 gdal.UseExceptions()
 project='EPSG:4326'
@@ -518,20 +517,57 @@ def quadtree(gdf,col_name):
 
 
 
-#./data mesin koplo
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
-#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-h= "./data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
-p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
-
-###./data mesin genta
-#ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
-#fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-#p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+h="/Users/ridwansatria/Projects/cbd-slum/data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
+p="/Users/ridwansatria/Projects/cbd-slum/data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsuc).sort_values("P15")
+
+for i in city.index:
+    cellHP = get_cell(i)
+    cellHP.plot("Hval")
+
+
+jakarta_uc = get_cell(11861)
+
+print(jakarta_uc["Vval"].median)
+
+
+jakarta_highrise = jakarta_uc[jakarta_uc["Hval"] >= jakarta_uc["Hval"].median()]
+
+jakarta_highrise["Hval"].unique()
+jakarta_uc["Hval"].unique()
+print(jakarta_uc["Hval"])
+
+
+jakarta_uc.plot("Hval")
+
+jakarta_highrise.plot("Hval")
+
+
+
+
+cellHP.plot("Hval")
+
+print(cellHP["Hval"])
+
+clustering = DBSCAN(eps=100, min_samples=2).fit(cellHP[["x", "y"]])
+
+cellHP["cluster"] = clustering.labels_
+
+cellHP.plot("cluster")
+
+
+cellHP_highrise = cellHP[cellHP["Hval"] >= cellHP["Hval"].median()]
+clustering = DBSCAN(eps=100, min_samples=2).fit(cellHP_highrise[["x", "y"]])
+cellHP_highrise["cluster"] = clustering.labels_.astype(str)
+
+cellHP_highrise.plot("cluster")
+cellHP_highrise.explore("cluster").save("koplobangsat.html")
+
+meanClusterSize = cellHP.groupby("cluster").size()
+
 #city = gpd.read_file(fua).sort_values("FUA_p_2015")
 #print(len(city))
 
@@ -546,11 +582,12 @@ city = gpd.read_file(ghsuc).sort_values("P15")
 city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
-num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
 #mem = sklearn.get_config()['working_memory']
 #print(mem)
 #work_mem = (mem / (num_cores + 1))
 #num_cores=1
+"""
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 
 rads=[1000,2500,5000,7500,10000,12500,15000,17500,20000]  # in meter
@@ -636,4 +673,4 @@ if __name__ == '__main__':
 #print(f"runtime with {len(cellHP)} data ={stop-start}")
 
 
-
+"""
