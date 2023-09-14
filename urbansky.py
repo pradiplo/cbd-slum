@@ -81,6 +81,7 @@ world_gov["gdp/pop"]=world_gov["GDP_MD_EST"]/world_gov["POP_EST"]
 ###city
 path="./data/avg3m_13_07_2023.json"
 path="./data/uc_avg3m_14_07_2023.json"
+path = "./data/builtvolume_31_07_2023.json"
 city_res=gpd.read_file(f"{path}")
 city_res["Cntry_ISO"]=city_res["CTR_MN_ISO"]
 city_res["FUA_p_2015"]=city_res["P15"]
@@ -111,6 +112,7 @@ city_res["circ"]=momepy.CircularCompactness(city_res).series
 city_res["elongat"]=momepy.Elongation(city_res).series
 city_res["frac_ar"]=momepy.FractalDimension(city_res).series
 """
+
 def rsquare(x, y, degree):
     results = {}
     coeffs = np.polyfit(x, y, degree)
@@ -143,6 +145,7 @@ def scale(ser):
     ser -= ser.min()
     ser /= ser.max()
     return ser.values 
+
 def list_files(dir,ex="csv"):
    import os
    r=[]

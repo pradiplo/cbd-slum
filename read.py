@@ -48,7 +48,7 @@ def mask_raster(rasfile, shape_geoser,i=""):
         crs=src.crs
         shape_geoser=shape_geoser.to_crs(crs)
         shape=shape_geoser.values
-        out_image, out_transform = RM.mask(src, shape, crop=True, nodata=np.nan)
+        out_image, out_transform = RM.mask(src, shape, crop=True, nodata=-1)
         out_meta = src.meta
         out_meta.update({"driver":"GTiff",
                          "height":out_image.shape[1],
@@ -300,15 +300,16 @@ def get_cell(cityID):
         #merging cellH and CellP = cellHP 
         cellHP=cellH.join(cellP.VALUE.rename("P"))
         cellHP.columns=["Hval", "geometry", "x", "y","Pval"]
-        cellHP=cellHP[cellHP.Hval>=0] #nan value entah knp jadi -2147483648 use H sebagai destinasi
-        cellHP.loc[cellHP["Pval"] <0, "Pval"] = 0
+        cellHP=cellHP[cellHP.Pval > 0 ] 
+        cellHP=cellHP[cellHP.Hval > 0 ] #nan value entah knp jadi -2147483648 use H sebagai destinasi
+        #cellHP.loc[cellHP["Pval"] < 0, "Pval"] = 0
         cellHP["3d_dens"] = cellHP["Pval"] / cellHP["Hval"]  #can be 0-div probelm,yields inf val ? == make gini and mse nan? hrs dihandle
         return cellHP
     else:
         print(cityID, "has different h and p cropped-raster data")
         return 0
 
-def print_file_for_stats(cellHP, cityID, path="./data/cell_files_uc"):
+def print_file_for_stats(cellHP, cityID, path="./data/cell_files_uc_vol"):
     ada = os.path.exists(path)
     if not ada :
        os.makedirs(path)
@@ -316,7 +317,7 @@ def print_file_for_stats(cellHP, cityID, path="./data/cell_files_uc"):
     return 0
 
 def print_file(cityID):
-    save_path = "./data/cell_files_uc/cell_"  + str(cityID) + ".gz"
+    save_path = "./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz"
     cellHP = get_cell(cityID)
     data = cellHP.to_dict()
     compressed_data = pickle.dumps(data)
@@ -349,18 +350,13 @@ def read_compressed(path): #buat buka file .gz di atas wk
 def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
     cellHP = get_cell(cityID)
-   
-    
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
-
     #mse_pop_h = get_difference(cellHP,"Pval","Hval")
     #mse_2d_3d = get_difference(cellHP[cellHP["3d_dens"].notna()],"Pval","3d_dens")
-
     #jcr_pop_h  =  get_jcr_hot(cellHP, "Pval", "Hval")
     #jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
-
     #gini_pop = get_gini(cellHP,"Pval")
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
@@ -369,11 +365,12 @@ def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     #spr_h = get_eta(cellHP,"Hval")
     #spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
 
-    avgpop3d,  avgh  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean()
+    avgpop3d,  avgh, totvol  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean(), cellHP["Hval"].sum()
     #maxh, maxpop3d    = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
     local_vars=locals() # a dict of local variable in this function 
                         #(at this line so far)
+
     rets= {k: v for k, v in local_vars.items() if k not in vars2exclude}
     #make return variable (kecuali yang string namenya ada di vars2exclude)
     #next time gausah make col name "string" yg  mendokusai 
@@ -387,7 +384,7 @@ def calc_aggr_large(cityID,njobs):
     #print(cityID)
     start = timeit.default_timer()
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
-    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
     
     spr_pop = new_eta(cellHP,"Pval",njobs)
     spr_h = new_eta(cellHP,"Hval",njobs)
@@ -417,12 +414,25 @@ def calc_aggr_large(cityID,njobs):
     return list(rets.items())
 
 
-# use this for pop < 5e6 ??
-def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
+def get_quantity_by_radius(gdf,rads):
+    vols = []
+    pops = []
+    centro = gdf.dissolve().centroid
+    for r in rads:
+        circ = centro.buffer(r)
+        clipped = gdf.clip(circ)
+        #clipped.plot()
+        #plt.show()
+        pops.append(clipped["Pval"].sum())
+        vols.append(clipped["Hval"].sum())
+    return vols, pops
 
-    vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ]
+# use this for pop < 5e6 ??
+def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20000]):
+
+    vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ,"rads"]
     #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
-    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
     
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
@@ -437,24 +447,26 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
     #print(cityID)
-    if len(cellHP["Pval"]) > 4 and len(cellHP["Hval"]) > 4 : 
-        spr_pop = new_eta(cellHP,"Pval",1)
-        spr_h = new_eta(cellHP,"Hval",1)
-    else:
-        spr_pop = -1
-        spr_h = -1    
+    #if len(cellHP["Pval"]) > 4 and len(cellHP["Hval"]) > 4 : 
+    #    spr_pop = new_eta(cellHP,"Pval",1)
+    #    spr_h = new_eta(cellHP,"Hval",1)
+    #else:
+    #    spr_pop = -1
+    #    spr_h = -1    
 
    # if len(cellHP[cellHP["3d_dens"].notna()]) > 0:
     #    spr_3dpop = get_eta(cellHP[cellHP["3d_dens"].notna()], "3d_dens") 
     #else:
     #    spr_3dpop = -1
-    cropped = cellHP[cellHP["Hval"] > 3 ]
+    #cropped = cellHP[cellHP["Hval"] > 3 ]
+    vols, pops = get_quantity_by_radius(cellHP,rads)
 
-    if len(cropped) > 4:
-        avgpop3d,  avgh  = cropped["3d_dens"].mean(), cropped["Hval"].mean()
-        infpercap = (sum(cellHP["Hval"])*1e4) / sum(cellHP["Pval"])
-    else:
-        avgpop3d,avgh = -1,-1    
+    #if len(cropped) > 4:
+    avgpop3d,  avgh, totvol  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean(), cellHP["Hval"].sum()
+
+    infpercap =  cellHP["Hval"].sum() / cellHP["Pval"].sum()
+    #else:
+    #    avgpop3d,avgh = -1,-1    
     #maxpop3d,  maxh  = cellHP["3d_dens"].max(), cellHP["Hval"].max()
     
     local_vars=locals() # a dict of local variable in this function 
@@ -468,12 +480,12 @@ def calc_aggregate2(cityID,   h_thrs = [15,25,35,45,55,65]):
 
 
 def implement_quad(cityID):
-    cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
     quadtree(cellHP,"Hval")
 
 
 def quadtree(gdf,col_name):
-    #cellHP = read_compressed("./data/cell_files_uc/cell_"  + str(cityID) + ".gz")
+    #cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
     #thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
     thres =  gdf[col_name].mean()
     #bbox = get_bbox(gdf)
@@ -483,11 +495,10 @@ def quadtree(gdf,col_name):
     #print(width)
     cx = gdf.dissolve().centroid.x.values
     cy = gdf.dissolve().centroid.y.values
+
     if len(hotspot)>0:
         points = np.array([hotspot["x"],hotspot["y"]]).transpose() #.astype("int16")
-        
         tree = quads.QuadTree((cx[0],cy[0]),math.ceil(width[0]) + 1000,math.ceil(height[0]) + 1000)
-    
         #tree = quads.QuadTree((-100, -110), 20, 20)
         #tree.insert((3, 5))
         #print(width/2)
@@ -502,8 +513,6 @@ def quadtree(gdf,col_name):
         #bbox = [min(hotspot["x"]),max(hotspot["x"]),min(hotspot["y"]),max(hotspot["y"])]
         #print(bbox)
 
-
-
     else:
         print("no hotspot")      
 
@@ -511,7 +520,8 @@ def quadtree(gdf,col_name):
 
 #./data mesin koplo
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
-h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+h= "./data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 ###./data mesin genta
@@ -525,30 +535,30 @@ city = gpd.read_file(ghsuc).sort_values("P15")
 #city = gpd.read_file(fua).sort_values("FUA_p_2015")
 #print(len(city))
 
-city = city[city["P15"] < 1e6]
+#city = city[city["P15"] < 1e6]
 #print(len(city))
 #city = city[city["P15"] >= 1e6]
-#city = city.head(2)
+#city = city.head(5)
 #city = city.iloc[1000:]
-city = city.sample(1).sort_values("P15")
+#city = city.sample(1).sort_values("P15")
 #city=city.set_index("eFUA_ID", drop=False)
 #cityID=city.index[-1]
 city = city.set_index("ID_HDC_G0",drop=False)
 
 #for running in cluster with SLURM
-#num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
+num_cores= int(os.environ['SLURM_CPUS_PER_TASK'])
 #mem = sklearn.get_config()['working_memory']
 #print(mem)
 #work_mem = (mem / (num_cores + 1))
-num_cores=1
+#num_cores=1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
+
+rads=[1000,2500,5000,7500,10000,12500,15000,17500,20000]  # in meter
 #(biar bisa pake komprehensi list dan gak nulis2 lagi pas nge-wide list of areas)
 print("Working with " +str(num_cores) + " cores for " + str(len(city)) + " cities")
 
-
 def implementation_1():
     results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate)(idx, h_thrs) for (idx) in city.ID_HDC_G0)
-    
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
     city_res = city_res.drop("ID_HDC_G0",axis=1)
     #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
@@ -557,15 +567,16 @@ def implementation_1():
 
 def implementation_2():
     #Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.ID_HDC_G0)
-    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, h_thrs) for (idx) in city.ID_HDC_G0)
-    
+    results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, rads) for (idx) in city.ID_HDC_G0)
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
     city_res = city_res.drop("ID_HDC_G0",axis=1)
-    print(city_res)
-    #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
-    #city_res = city_res.drop("cbd_areas",axis=1)
-    city_res.to_file(f"./data/avg3m_small_{today}.json",driver="GeoJSON")
 
+    city_res[["pop_"+str(t) for t in rads]] = pd.DataFrame(city_res.pops.to_list(), index=city_res.index)
+    city_res[["volume_"+str(t) for t in rads]] = pd.DataFrame(city_res.vols.to_list(), index=city_res.index)
+    city_res = city_res.drop("vols",axis=1)
+    city_res = city_res.drop("pops",axis=1)
+    print(city_res)
+    city_res.to_file(f"./data/builtvolume_{today}.json",driver="GeoJSON")
 
 def implementation_large(num_cores):
     #print(len(city))
@@ -578,7 +589,6 @@ def implementation_large(num_cores):
     city_res.to_file(f"./data/avg3m_large_{today}.json",driver="GeoJSON")
 
 def test():
-
     tracemalloc.start()
     start = timeit.default_timer()
     implementation_2()
@@ -608,9 +618,9 @@ def test_eta():
     #plt.xlabel("old")
     #plt.ylabel("new")
 if __name__ == '__main__':
-    a = [implement_quad(i) for i in city.ID_HDC_G0]
+    #a = [implement_quad(i) for i in city.ID_HDC_G0]
     #test()
-    #implementation_2()
+    implementation_2()
     #implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
 #cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")
