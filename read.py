@@ -524,49 +524,14 @@ p="/Users/ridwansatria/Projects/cbd-slum/data/GHS_POP_E2020_GLOBE_R2023A_54009_1
 
 city = gpd.read_file(ghsuc).sort_values("P15")
 
-for i in city.index:
-    cellHP = get_cell(i)
-    cellHP.plot("Hval")
 
+def clustersizes(df, col_name):
+    df = df[df[col_name] >= df[col_name].median()]
+    clustering = DBSCAN(eps=100, min_samples=2).fit(cellHP[["x", "y"]])
+    df["cluster"] = clustering.labels_.astype(str) 
+    df = df[df["cluster"] != -1]
+    return clusterSize = df.groupby("cluster").size().to_list()
 
-jakarta_uc = get_cell(11861)
-
-print(jakarta_uc["Vval"].median)
-
-
-jakarta_highrise = jakarta_uc[jakarta_uc["Hval"] >= jakarta_uc["Hval"].median()]
-
-jakarta_highrise["Hval"].unique()
-jakarta_uc["Hval"].unique()
-print(jakarta_uc["Hval"])
-
-
-jakarta_uc.plot("Hval")
-
-jakarta_highrise.plot("Hval")
-
-
-
-
-cellHP.plot("Hval")
-
-print(cellHP["Hval"])
-
-clustering = DBSCAN(eps=100, min_samples=2).fit(cellHP[["x", "y"]])
-
-cellHP["cluster"] = clustering.labels_
-
-cellHP.plot("cluster")
-
-
-cellHP_highrise = cellHP[cellHP["Hval"] >= cellHP["Hval"].median()]
-clustering = DBSCAN(eps=100, min_samples=2).fit(cellHP_highrise[["x", "y"]])
-cellHP_highrise["cluster"] = clustering.labels_.astype(str)
-
-cellHP_highrise.plot("cluster")
-cellHP_highrise.explore("cluster").save("koplobangsat.html")
-
-meanClusterSize = cellHP.groupby("cluster").size()
 
 #city = gpd.read_file(fua).sort_values("FUA_p_2015")
 #print(len(city))
