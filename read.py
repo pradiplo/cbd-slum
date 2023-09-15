@@ -402,7 +402,7 @@ def get_quantity_by_radius(gdf,rads):
         pops.append(clipped["Pval"].sum())
         vols.append(clipped["Hval"].sum())
     return vols, pops
-import radial_scaling as rs
+
 
 def new_eta(gdf,col_name,njob):
     from scipy.spatial import distance
@@ -452,7 +452,10 @@ def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20
     #print(cellHP["Hval"])
   #  jcr_pop_h  = get_jcr_hot(cellHP, "Pval", "Hval")
   #  jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
+    from radial_scaling import radial_center_point
 
+    a=radial_center_point( 50, 1000, cellHP)
+    print(a)
     #gini_pop = get_gini(cellHP,"Pval")
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
@@ -499,10 +502,10 @@ h= "./data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 ###./data mesin genta
-ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
+#ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
 #fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-h="./data/GHS_BUILT_V_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
-p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+#h="./data/GHS_BUILT_V_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
+#p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsuc).sort_values("P15",ascending=True)
@@ -563,6 +566,9 @@ def implementation_large(num_cores):
     #city_res = city_res.drop("cbd_areas",axis=1)
     city_res.to_file(f"./data/avg3m_large_{today}.json",driver="GeoJSON")
 
+
+
+
 def test():
     tracemalloc.start()
     start = timeit.default_timer()
@@ -592,14 +598,18 @@ def test_eta():
     #plt.scatter(old, new[0:len(old)])
     #plt.xlabel("old")
     #plt.ylabel("new")
+import radial_scaling as rs
+from radial_scaling import radial_scaling_all 
+
 if __name__ == '__main__':
     #a = [implement_quad(i) for i in city.ID_HDC_G0]
     #test()
-    result=implementation_2()
-    datas=rs.list_files("./data/cell_files_uc_vol/", "gz")
-    datas=read_compressed([d for d in datas])
-    radials = rs(datas, "Hval", start=10, num=1000)
-    radials.to_csv("./data/radial_scaling.csv")
+    #implementation_2()
+    #datas=rs.list_files("./data/cell_files_uc_vol/", "gz")
+    #print(datas)
+    #datas=[read_compressed(d) for d in datas]
+    #radials = radial_scaling_all(datas, "Hval", start=10, num=1000)
+    #radials.to_csv("./data/d_scaling.csv")
 
     #implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
