@@ -24,7 +24,6 @@ import timeit
 import tracemalloc
 from itertools import combinations
 import sklearn
-import quads
 import matplotlib.pyplot as plt
 import math
 from barneshut import calc_avg_distance
@@ -400,11 +399,10 @@ def get_quantity_by_radius(gdf,rads):
     for r in rads:
         circ = centro.buffer(r)
         clipped = gdf.clip(circ)
-        #clipped.plot()
-        #plt.show()
         pops.append(clipped["Pval"].sum())
         vols.append(clipped["Hval"].sum())
     return vols, pops
+import radial_scaling as rs
 
 def new_eta(gdf,col_name,njob):
     from scipy.spatial import distance
@@ -493,44 +491,6 @@ def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
-def implement_quad(cityID):
-    cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
-    quadtree(cellHP,"Hval")
-
-
-def quadtree(gdf,col_name):
-    #cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
-    #thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
-    thres =  gdf[col_name].mean()
-    #bbox = get_bbox(gdf)
-    hotspot = gdf[gdf[col_name] >= thres]
-    width = gdf.dissolve().bounds["maxx"].values - gdf.dissolve().bounds["minx"].values 
-    height = gdf.dissolve().bounds["maxy"].values - gdf.dissolve().bounds["miny"].values
-    #print(width)
-    cx = gdf.dissolve().centroid.x.values
-    cy = gdf.dissolve().centroid.y.values
-
-    if len(hotspot)>0:
-        points = np.array([hotspot["x"],hotspot["y"]]).transpose() #.astype("int16")
-        tree = quads.QuadTree((cx[0],cy[0]),math.ceil(width[0]) + 1000,math.ceil(height[0]) + 1000)
-        #tree = quads.QuadTree((-100, -110), 20, 20)
-        #tree.insert((3, 5))
-        #print(width/2)
-        #tree.insert((width/2, height/2))
-        #print(points.shape[0])
-        for i in range(points.shape[0]):
-            print(tuple(points[i,:]))
-            tree.insert(tuple(points[i,:]))
-        quads.visualize(tree)   
-        #tree.visualize()    
-        plt.show()
-        #bbox = [min(hotspot["x"]),max(hotspot["x"]),min(hotspot["y"]),max(hotspot["y"])]
-        #print(bbox)
-
-    else:
-        print("no hotspot")      
-
-
 
 #./data mesin koplo
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
@@ -539,10 +499,10 @@ h= "./data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE
 p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
 
 ###./data mesin genta
-#ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
+ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
 #fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
-#p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
+h="./data/GHS_BUILT_V_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
+p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
 city = gpd.read_file(ghsuc).sort_values("P15",ascending=True)
@@ -635,7 +595,12 @@ def test_eta():
 if __name__ == '__main__':
     #a = [implement_quad(i) for i in city.ID_HDC_G0]
     #test()
-    implementation_2()
+    result=implementation_2()
+    datas=rs.list_files("./data/cell_files_uc_vol/", "gz")
+    datas=read_compressed([d for d in datas])
+    radials = rs(datas, "Hval", start=10, num=1000)
+    radials.to_csv("./data/radial_scaling.csv")
+
     #implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
 #cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")

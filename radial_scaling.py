@@ -81,15 +81,14 @@ def radial_scaling(datas, y_col, start, num):
     betas=pd.DataFrame(betas).T
     betas.columns =["m", "b", "r2"]    
     return betas 
+if __name__ == '__main__':
+
+    start, num=0, 1000
+    datas=list_files("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/", "json")
+    y_col="Hval"
 
 
-start, num=0, 1000
-datas=list_files("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/", "json")
-y_col="Hval"
 
-
-
-betas=radial_scaling(datas, y_col, start, num)
-betas["m"].plot()
-plt.show()
-betas.to_csv("betas_radial")
+    betas=radial_scaling(datas, y_col, start, num)
+    betas["m"].plot()
+    plt.show()
