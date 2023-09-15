@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import math
 
 from sklearn.cluster import DBSCAN
-
+from barneshut import calc_avg_distance
 gdal.UseExceptions()
 project='EPSG:4326'
 
@@ -77,8 +77,8 @@ def check_pixelANDcell(rasterfn, outSHPfn):
     d=len(gpd.read_file(outSHPfn))
     raster = raster2array(rasterfn)
     px=raster.shape[1]*raster.shape[0]
-    print(d, px)
-    print("pixel pont and cell geometry have same len?->", (d-px)==0)
+    #print(d, px)
+    #print("pixel pont and cell geometry have same len?->", (d-px)==0)
 
 def array2shp(array,outSHPfn,rasterfn):
     # max distance between points
@@ -181,7 +181,7 @@ def calculate_avg_dist_chunk(points,njobs):
 def get_eta(gdf,col_name):
     #gdf=gdf.copy()
     gdf=gdf.reset_index(drop=True) # keys assumes 0->x ordered index tp gdf took the effect of value filterings 
-    thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
+    thres = calc_loubar_threshold(gdf,col_name)  #gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
     with warnings.catch_warnings():
         warnings.simplefilter("ignore") # biar gak muncul centroid geographic crs shits
         centroidseries = gdf.centroid
@@ -206,31 +206,13 @@ def get_eta(gdf,col_name):
     loubar_dist_mat = eucl[loubar_keys.reshape(-1,1), loubar_keys]
     loubar_dist_corr = loubar_dist_mat[loubar_dist_mat>0]
     if len(loubar_dist_corr) > 0 and len(dist_corr) >0:
-        eta = loubar_dist_corr.mean()/dist_corr.mean()
+        eta = loubar_dist_corr.mean()  #/dist_corr.mean()
     else:
         eta = -1     
     return eta
 #cellHP=cellHP[cellHP["Hval"] > 3 ]
 
-def new_eta(gdf,col_name,njob):
-    from scipy.spatial import distance
-    gdf=gdf.reset_index(drop=True) 
-    
-    arbi=[(gdf["x"].values[0], gdf["y"].values[0])]
-    denom=distance.cdist(arbi,  [(x, y) for x, y in zip(gdf.x, gdf.y)]).mean() 
-    # asumsikan gdf== lattice, traversal of one2all kyknya mirip2 aja
-    #-> one2all arbitari mewakili all2all dlm rata? & sama cepetnya sama radius calc
 
-    thres =  gdf[col_name].mean()
-    hotspot = gdf[gdf[col_name] >= thres]
-
-    if len(hotspot)>0:
-        hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
-        hotspot_dist = calculate_avg_dist_chunk(hotspot_pos,njob)
-        eta =  hotspot_dist/denom
-        return eta
-    else:
-        return -1
 
 def get_gini(gdf,col_name):
     g15 = inequality.gini.Gini(gdf[col_name].values)
@@ -330,16 +312,13 @@ def read_compressed(path): #buat buka file .gz di atas wk
     with open(path, 'rb') as f:
         compressed_data = f.read()
         
-    
     # Decompress data using gzip and pickle
         decompressed_data = gzip.decompress(compressed_data)
-    
-    
+     
    # import pygeos as sp
     
     data = pickle.loads(decompressed_data)
         
-   
         #print(data)
     gdf = gpd.GeoDataFrame.from_dict(data)
 
@@ -349,6 +328,7 @@ def read_compressed(path): #buat buka file .gz di atas wk
 def calc_aggregate(cityID,   h_thrs = [15,25,35,45,55,65]):
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds" ]
     cellHP = get_cell(cityID)
+    
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
@@ -412,7 +392,6 @@ def calc_aggr_large(cityID,njobs):
     print('Calculation time: ', stop - start)  
     return list(rets.items())
 
-
 def get_quantity_by_radius(gdf,rads):
     vols = []
     pops = []
@@ -420,11 +399,44 @@ def get_quantity_by_radius(gdf,rads):
     for r in rads:
         circ = centro.buffer(r)
         clipped = gdf.clip(circ)
-        #clipped.plot()
-        #plt.show()
         pops.append(clipped["Pval"].sum())
         vols.append(clipped["Hval"].sum())
     return vols, pops
+
+
+def new_eta(gdf,col_name,njob):
+    from scipy.spatial import distance
+    gdf=gdf.reset_index(drop=True) 
+    
+    arbi=[(gdf["x"].values[0], gdf["y"].values[0])]
+    denom=distance.cdist(arbi,  [(x, y) for x, y in zip(gdf.x, gdf.y)]).mean() 
+    # asumsikan gdf== lattice, traversal of one2all kyknya mirip2 aja
+    #-> one2all arbitari mewakili all2all dlm rata? & sama cepetnya sama radius calc
+
+    thres =  gdf[col_name].mean()
+    hotspot = gdf[gdf[col_name] >= thres]
+
+    if len(hotspot)>0:
+        hotspot_pos = np.array([hotspot["x"],hotspot["y"]]).transpose()
+        hotspot_dist = calculate_avg_dist_chunk(hotspot_pos,njob)
+        eta =  hotspot_dist/denom
+        return eta
+    else:
+        return -1
+
+def get_eta_barnes(gdf,col_name,theta):
+    thres =  calc_loubar_threshold(gdf,col_name)  #gdf[col_name].mean() 
+    hotspot = gdf[gdf[col_name] >= thres]
+    centroidseries = hotspot.centroid
+    x, y = [list(t) for t in zip(*map(getXY,centroidseries))]
+    matpos = np.array([x,y]).transpose()
+    hotspot_avg_dist = calc_avg_distance(matpos,theta)
+    bound = gdf.dissolve().bounds
+    radius = 0.5*np.sqrt(np.power((bound.loc[0].maxx - bound.loc[0].minx),2) + np.power((bound.loc[0].maxy - bound.loc[0].miny),2)) 
+    avg_dist_all = (128*radius) / (45*np.pi)
+    eta = hotspot_avg_dist #/ avg_dist_all
+    return eta
+
 
 # use this for pop < 5e6 ??
 def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20000]):
@@ -432,23 +444,27 @@ def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20
     vars2exclude=["vars2exclude", "cellHP", "h_thrs","cbds","cropped" ,"rads"]
     #cellHP = gpd.read_file("./data/cell_files/cell_"  + str(cityID) + ".json")
     cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
-    
     #cbds = [cellHP[cellHP["Hval"] >= h_thr] for h_thr in h_thrs ]
     #cbd_areas = [len(cbd) * 1e-2 for cbd in cbds] #in km2
     #get diff 
   #  mse_pop_h = get_difference(cellHP,"Pval","Hval")
   #  mse_2d_3d = get_difference(cellHP[cellHP["3d_dens"].notna()],"Pval","3d_dens")
-
+    #print(cellHP["Hval"])
   #  jcr_pop_h  = get_jcr_hot(cellHP, "Pval", "Hval")
   #  jcr_2d_3d =  get_jcr_hot(cellHP[cellHP["3d_dens"].notna()], "Pval", "3d_dens")
+    from radial_scaling import radial_center_point
 
+    a=radial_center_point( 50, 1000, cellHP)
+    print(a)
     #gini_pop = get_gini(cellHP,"Pval")
     #gini_h = get_gini(cellHP,"Hval")
     #gini_3dpop = get_gini(cellHP[cellHP["3d_dens"].notna()], "3d_dens")
     #print(cityID)
     #if len(cellHP["Pval"]) > 4 and len(cellHP["Hval"]) > 4 : 
-    #    spr_pop = new_eta(cellHP,"Pval",1)
-    #    spr_h = new_eta(cellHP,"Hval",1)
+    spr_pop = get_eta_barnes(cellHP,"Pval",0.5)
+    spr_pop_brute = get_eta(cellHP,"Pval")
+    spr_h = get_eta_barnes(cellHP,"Hval",0.5)
+    spr_dens = get_eta_barnes(cellHP,"3d_dens",0.5)
     #else:
     #    spr_pop = -1
     #    spr_h = -1    
@@ -458,7 +474,7 @@ def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20
     #else:
     #    spr_3dpop = -1
     #cropped = cellHP[cellHP["Hval"] > 3 ]
-    vols, pops = get_quantity_by_radius(cellHP,rads)
+    #vols, pops = get_quantity_by_radius(cellHP,rads)
 
     #if len(cropped) > 4:
     avgpop3d,  avgh, totvol  = cellHP["3d_dens"].mean(), cellHP["Hval"].mean(), cellHP["Hval"].sum()
@@ -478,51 +494,20 @@ def calc_aggregate2(cityID, rads=[1000,2500,5000,7500,10000,12500,15000,17500,20
     return list(rets.items()) # to temporary ngirit memory pas multiproses karena memori usage dict =  list * approx 4
 
 
-def implement_quad(cityID):
-    cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
-    quadtree(cellHP,"Hval")
-
-
-def quadtree(gdf,col_name):
-    #cellHP = read_compressed("./data/cell_files_uc_vol/cell_"  + str(cityID) + ".gz")
-    #thres =  gdf[col_name].mean() #or loubar, tp mean lbh oke kayanya
-    thres =  gdf[col_name].mean()
-    #bbox = get_bbox(gdf)
-    hotspot = gdf[gdf[col_name] >= thres]
-    width = gdf.dissolve().bounds["maxx"].values - gdf.dissolve().bounds["minx"].values 
-    height = gdf.dissolve().bounds["maxy"].values - gdf.dissolve().bounds["miny"].values
-    #print(width)
-    cx = gdf.dissolve().centroid.x.values
-    cy = gdf.dissolve().centroid.y.values
-
-    if len(hotspot)>0:
-        points = np.array([hotspot["x"],hotspot["y"]]).transpose() #.astype("int16")
-        tree = quads.QuadTree((cx[0],cy[0]),math.ceil(width[0]) + 1000,math.ceil(height[0]) + 1000)
-        #tree = quads.QuadTree((-100, -110), 20, 20)
-        #tree.insert((3, 5))
-        #print(width/2)
-        #tree.insert((width/2, height/2))
-        #print(points.shape[0])
-        for i in range(points.shape[0]):
-            print(tuple(points[i,:]))
-            tree.insert(tuple(points[i,:]))
-        quads.visualize(tree)   
-        #tree.visualize()    
-        plt.show()
-        #bbox = [min(hotspot["x"]),max(hotspot["x"]),min(hotspot["y"]),max(hotspot["y"])]
-        #print(bbox)
-
-    else:
-        print("no hotspot")      
-
-
 
 ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
-h="/Users/ridwansatria/Projects/cbd-slum/data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
-p="/Users/ridwansatria/Projects/cbd-slum/data/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
+#h="./data/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0/GHS_BUILT_H_ANBH_E2018_GLOBE_R2022A_54009_100_V1_0.tif"
+h= "./data/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_100_V1_0.tif"
+p="./data/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0/GHS_POP_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
+
+###./data mesin genta
+#ghsuc="./data/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_2.gpkg"
+#fua="./data/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+#h="./data/GHS_BUILT_V_E2020_GLOBE_R2022A_54009_100_V1_0.tif"
+#p="./data/GHS_POP_E2015_GLOBE_R2022A_54009_100_V1_0.tif"
 
 
-city = gpd.read_file(ghsuc).sort_values("P15")
+city = gpd.read_file(ghsuc).sort_values("P15",ascending=True)
 
 
 def clustersizes(df, col_name):
@@ -539,7 +524,7 @@ def clustersizes(df, col_name):
 #city = city[city["P15"] < 1e6]
 #print(len(city))
 #city = city[city["P15"] >= 1e6]
-#city = city.head(5)
+city = city.head(5)
 #city = city.iloc[1000:]
 #city = city.sample(1).sort_values("P15")
 #city=city.set_index("eFUA_ID", drop=False)
@@ -551,8 +536,7 @@ city = city.set_index("ID_HDC_G0",drop=False)
 #mem = sklearn.get_config()['working_memory']
 #print(mem)
 #work_mem = (mem / (num_cores + 1))
-#num_cores=1
-"""
+num_cores=1
 h_thrs=[15,25,35,45,55,65] #define h trsh first 
 
 rads=[1000,2500,5000,7500,10000,12500,15000,17500,20000]  # in meter
@@ -568,17 +552,18 @@ def implementation_1():
     city_res.to_file(f"./data/hthr_{today}.json",driver="GeoJSON")
 
 def implementation_2():
-    #Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.ID_HDC_G0)
+    Parallel(n_jobs=num_cores, verbose=1)(delayed(print_file)(idx) for (idx) in city.ID_HDC_G0)
     results = Parallel(n_jobs=num_cores, verbose=1)(delayed(calc_aggregate2)(idx, rads) for (idx) in city.ID_HDC_G0)
     city_res = city.join(pd.DataFrame([dict(d) for d in results]).set_index("cityID")) #blm tau run timenya kalo banyak 
     city_res = city_res.drop("ID_HDC_G0",axis=1)
 
-    city_res[["pop_"+str(t) for t in rads]] = pd.DataFrame(city_res.pops.to_list(), index=city_res.index)
-    city_res[["volume_"+str(t) for t in rads]] = pd.DataFrame(city_res.vols.to_list(), index=city_res.index)
-    city_res = city_res.drop("vols",axis=1)
-    city_res = city_res.drop("pops",axis=1)
-    print(city_res)
-    city_res.to_file(f"./data/builtvolume_{today}.json",driver="GeoJSON")
+    #city_res[["pop_"+str(t) for t in rads]] = pd.DataFrame(city_res.pops.to_list(), index=city_res.index)
+    #city_res[["volume_"+str(t) for t in rads]] = pd.DataFrame(city_res.vols.to_list(), index=city_res.index)
+    #city_res = city_res.drop("vols",axis=1)
+    #city_res = city_res.drop("pops",axis=1)
+    print(city_res["spr_pop"])
+    print(city_res["spr_pop_brute"])
+    city_res.to_file(f"./data/eta_builtvolume_{today}.json",driver="GeoJSON")
 
 def implementation_large(num_cores):
     #print(len(city))
@@ -589,6 +574,9 @@ def implementation_large(num_cores):
     #city_res[["cbd_a_"+str(t) for t in h_thrs]] = pd.DataFrame(city_res.cbd_areas.to_list(), index=city_res.index)
     #city_res = city_res.drop("cbd_areas",axis=1)
     city_res.to_file(f"./data/avg3m_large_{today}.json",driver="GeoJSON")
+
+
+
 
 def test():
     tracemalloc.start()
@@ -619,10 +607,19 @@ def test_eta():
     #plt.scatter(old, new[0:len(old)])
     #plt.xlabel("old")
     #plt.ylabel("new")
+import radial_scaling as rs
+from radial_scaling import radial_scaling_all 
+
 if __name__ == '__main__':
     #a = [implement_quad(i) for i in city.ID_HDC_G0]
     #test()
-    implementation_2()
+    #implementation_2()
+    #datas=rs.list_files("./data/cell_files_uc_vol/", "gz")
+    #print(datas)
+    #datas=[read_compressed(d) for d in datas]
+    #radials = radial_scaling_all(datas, "Hval", start=10, num=1000)
+    #radials.to_csv("./data/d_scaling.csv")
+
     #implementation_large(num_cores)
 #cellHP=gpd.read_file("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/cell_10523.0.json")
 #cellHP=read_compressed("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files 2/cell_7165.0.gz")

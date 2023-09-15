@@ -14,7 +14,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def radial_center_point (start, num, data):
-    
     target=[(x, y) for x, y in zip(data.x, data.y)]
     center=data.dissolve().centroid
     dismat=distance.cdist([(center.x[0], center.y[0])], target).T
@@ -42,6 +41,7 @@ def rsquare(x, y, degree):
     sstot = np.sum((y - ybar)**2)    # or sum([ (yi - ybar)**2 for yi in y])
     rsq = ssreg / sstot
     return rsq
+
 def fitfunc(x,y):
     m,b = np.polyfit(x,y,1)
     r2 = rsquare(x,y,1)
@@ -57,10 +57,11 @@ def list_files(dir,ex="csv"):
    print(f"generating data from {len(r)} files")
    return r
 
-def radial_scaling(datas, y_col, start, num):
+def radial_scaling_all(datas, y_col, start, num):
     glob={}
     betas={}
     for data in datas:
+        print(data)
         data=gpd.read_file(data)
         data=radial_center_point (start, num, data)
         grp=data.groupby("ovr")
@@ -81,15 +82,14 @@ def radial_scaling(datas, y_col, start, num):
     betas=pd.DataFrame(betas).T
     betas.columns =["m", "b", "r2"]    
     return betas 
+if __name__ == '__main__':
+
+    start, num=0, 1000
+    datas=list_files("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/", "json")
+    y_col="Hval"
 
 
-start, num=0, 1000
-datas=list_files("/Volumes/HDPH-UT/K-Jkt copy/cbd-slum/data/cell_files/", "json")
-y_col="Hval"
 
-
-
-betas=radial_scaling(datas, y_col, start, num)
-betas["m"].plot()
-plt.show()
-betas.to_csv("betas_radial")
+    betas=radial_scaling(datas, y_col, start, num)
+    betas["m"].plot()
+    plt.show()
